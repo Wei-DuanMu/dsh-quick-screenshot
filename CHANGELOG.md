@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 — 2026-11-05
+
+**Service lookup can no longer throw on a service that is not mounted**
+
+The same order-dependent lookup guarded `ctx.get(name)` but not the `ctx[name]` fallback, and a
+cordis proxy is allowed to throw on an unknown service. Both forms are guarded now, so a missing
+`connection` reads as "no service" instead of an exception during `apply`.
+
 ## 0.5.1 — 2026-11-05
 
 **The settings panel no longer says "HTTP 404"**
