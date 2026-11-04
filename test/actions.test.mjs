@@ -19,13 +19,10 @@ import {
   attachImage,
   autoStartHotkey,
   capture,
-  captureForComposer,
-  createComposerCaptureHandler,
   explainCaptureFailure,
   hotkeyControl,
   listWindows,
   parseDestinations,
-  resolveComposerTarget,
   resolveTarget,
   service,
   sessionCwd,
@@ -53,10 +50,9 @@ const windows = [
  * A capture helper that records calls and can materialize files on demand.
  */
 class FakeHelper {
-  constructor ({ onCapture, onSelect } = {}) {
+  constructor ({ onCapture } = {}) {
     this.calls = []
     this.onCapture = onCapture
-    this.onSelect = onSelect
   }
 
   async request (cmd, args = {}) {
@@ -86,22 +82,6 @@ class FakeHelper {
             clipboardWritten: args.clipboard === true,
             elapsedMs: 12,
           },
-        }
-      }
-      case 'select_region': {
-        if (this.onSelect) return await this.onSelect(args)
-        await writeFile(args.path, Buffer.from('fake-png-bytes'))
-        return {
-          capture: {
-            path: args.path,
-            width: 320,
-            height: 200,
-            method: 'overlay',
-            blank: false,
-            clipboardWritten: args.clipboard === true,
-            elapsedMs: 2600,
-          },
-          region: { x: 100, y: 200, width: 320, height: 200, monitor: 1, wholeMonitor: false },
         }
       }
       default:
@@ -408,43 +388,6 @@ describe('capture', () => {
     const value = await capture({ args: { target: 'screen', destinations: 'archive,clipboard' }, exec: {}, ctx: {}, helper: stuck, dataDir, stateDirectory })
     assert.equal(value.clipboardWritten, false)
     assert.ok(value.notes.some((note) => note.includes('剪贴板被其他程序占用')))
-  })
-
-  it('opens the overlay for a bare region and reports where the user drew', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const overlay = new FakeHelper()
-    const value = await capture({ args: { target: 'region', destinations: 'archive' }, exec: {}, ctx: {}, helper: overlay, dataDir, stateDirectory })
-
-    assert.equal(overlay.calls.at(-1).cmd, 'select_region', 'a bare region must ask the overlay, not capture blindly')
-    assert.equal(value.method, 'overlay')
-    assert.equal(value.target.kind, 'select')
-    assert.deepEqual(value.target.region, { x: 100, y: 200, width: 320, height: 200, monitor: 1, wholeMonitor: false })
-  })
-
-  it('explains a click-through monitor selection instead of letting the size look arbitrary', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const whole = new FakeHelper({
-      onSelect: async (args) => {
-        await writeFile(args.path, Buffer.from('bytes'))
-        return {
-          capture: { path: args.path, width: 1920, height: 1080, method: 'overlay', blank: false, clipboardWritten: false, elapsedMs: 90 },
-          region: { x: 0, y: 0, width: 1920, height: 1080, monitor: 2, wholeMonitor: true },
-        }
-      },
-    })
-    const value = await capture({ args: { target: 'select', destinations: 'archive' }, exec: {}, ctx: {}, helper: whole, dataDir, stateDirectory })
-    assert.ok(value.notes.some((note) => note.includes('整块显示器')))
-  })
-
-  it('treats a dismissed overlay as a decision, not a failure', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const cancelled = new FakeHelper({
-      onSelect: async () => { throw new HelperError('dismissed', 'SELECTION_CANCELLED') },
-    })
-    await assert.rejects(
-      capture({ args: { target: 'region', destinations: 'archive' }, exec: {}, ctx: {}, helper: cancelled, dataDir, stateDirectory }),
-      /已取消框选/,
-    )
   })
 })
 
@@ -813,122 +756,5 @@ describe('renderers', () => {
   it('describes a target from its window when one was resolved', () => {
     assert.equal(targetDescription({ kind: 'window', description: 'window' }, { title: 'Edge', process: 'msedge', width: 10, height: 10 }), '「Edge」 (msedge) 10x10')
     assert.equal(targetDescription({ kind: 'monitor', description: '显示器 #1' }, null), '显示器 #1')
-  })
-})
-
-describe('composer button capture', () => {
-  it('targets the focused window in active mode', async () => {
-    const resolved = await resolveComposerTarget({ windows, helper: new FakeHelper(), mode: 'active' })
-    assert.equal(resolved.request.kind, 'window')
-    assert.equal(resolved.request.handle, 100)
-    assert.equal(resolved.fallback, null)
-    assert.match(resolved.label, /Microsoft Edge/)
-  })
-
-  it('falls back to the pointer monitor when no window is focused', async () => {
-    const unfocused = windows.map((window) => ({ ...window, active: false }))
-    const helper = new FakeHelper()
-    helper.cursorMonitor = { index: 2, x: 900, y: 50 }
-    const resolved = await resolveComposerTarget({ windows: unfocused, helper, mode: 'active' })
-    assert.deepEqual(resolved.request, { kind: 'monitor', index: 2 })
-    assert.equal(resolved.fallback, 'monitor')
-  })
-
-  it('falls back to the whole desktop when even the pointer is unresolved', async () => {
-    const unfocused = windows.map((window) => ({ ...window, active: false }))
-    const helper = new FakeHelper()
-    helper.cursorMonitor = { index: -1, x: 0, y: 0 }
-    const resolved = await resolveComposerTarget({ windows: unfocused, helper, mode: 'active' })
-    assert.deepEqual(resolved.request, { kind: 'screen' })
-    assert.equal(resolved.fallback, 'screen')
-  })
-
-  it('honours the configured mode', async () => {
-    const helper = new FakeHelper()
-    assert.equal((await resolveComposerTarget({ windows, helper, mode: 'monitor' })).request.kind, 'monitor')
-    assert.equal((await resolveComposerTarget({ windows, helper, mode: 'screen' })).request.kind, 'screen')
-  })
-
-  it('archives into the session workspace and returns the bytes', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const helper = new FakeHelper()
-    const shot = await captureForComposer({ helper, dataDir, stateDirectory, cwd: workspace })
-
-    assert.equal(shot.archived, true)
-    assert.equal(path.dirname(path.join(workspace, 'screenshots', shot.fileName)), path.join(workspace, 'screenshots'))
-    assert.equal(shot.contentType, 'image/png')
-    assert.equal(shot.bytes.toString(), 'fake-png-bytes')
-    assert.ok(existsSync(path.join(workspace, 'screenshots', shot.fileName)), 'the archive file must exist')
-    const captureCall = helper.calls.find((call) => call.cmd === 'capture')
-    assert.equal(captureCall.args.clipboard, false, 'clipboard is off by default for composer captures')
-  })
-
-  it('uses a scratch file and removes it when archiving is off', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null, composerArchive: false })
-    const helper = new FakeHelper()
-    const shot = await captureForComposer({ helper, dataDir, stateDirectory, cwd: workspace })
-    assert.equal(shot.archived, false)
-    assert.ok(shot.path === undefined || shot.path === null)
-    assert.equal(existsSync(path.join(stateDirectory, 'tmp', shot.fileName)), false, 'scratch capture must not leak')
-  })
-
-  it('explains a helper failure with an actionable message', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const failing = new FakeHelper({
-      onCapture: async () => { throw new HelperError('minimized', 'WINDOW_MINIMIZED_BLANK') },
-    })
-    await assert.rejects(
-      captureForComposer({ helper: failing, dataDir, stateDirectory, cwd: workspace }),
-      (error) => {
-        assert.equal(error.code, 'WINDOW_MINIMIZED_BLANK')
-        assert.match(error.message, /先还原窗口/)
-        return true
-      },
-    )
-  })
-})
-
-describe('composer capture route', () => {
-  const deps = () => ({ helper: new FakeHelper(), dataDir, stateDirectory, cwd: workspace })
-
-  it('rejects anything but POST', async () => {
-    await resetConfig({ archiveDir: null })
-    const handler = createComposerCaptureHandler(deps())
-    const response = await handler(new Request('http://localhost/api/quick-screenshot/capture', { method: 'GET' }))
-    assert.equal(response.status, 405)
-    assert.equal(response.headers.get('allow'), 'POST')
-  })
-
-  it('answers a POST with PNG bytes and capture metadata', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const handler = createComposerCaptureHandler(deps())
-    const response = await handler(
-      new Request('http://localhost/api/quick-screenshot/capture?sessionId=s1', { method: 'POST' }),
-      { cwd: workspace },
-    )
-
-    assert.equal(response.status, 200)
-    assert.equal(response.headers.get('content-type'), 'image/png')
-    assert.equal(response.headers.get('cache-control'), 'no-store')
-    assert.equal(response.headers.get('x-capture-archived'), '1')
-    assert.ok(decodeURIComponent(response.headers.get('x-capture-file')).endsWith('.png'))
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    assert.equal(bytes.length, 'fake-png-bytes'.length)
-  })
-
-  it('turns a capture failure into a JSON message the button can show', { skip: !isWindows }, async () => {
-    await resetConfig({ archiveDir: null })
-    const failing = new FakeHelper({
-      onCapture: async () => { throw new HelperError('no pixels', 'CAPTURE_FAILED') },
-    })
-    const handler = createComposerCaptureHandler({ helper: failing, dataDir, stateDirectory, cwd: workspace })
-    const response = await handler(new Request('http://localhost/api/quick-screenshot/capture', { method: 'POST' }))
-
-    assert.equal(response.status, 500)
-    assert.match(String(response.headers.get('content-type')), /application\/json/)
-    const payload = await response.json()
-    assert.equal(payload.ok, false)
-    assert.equal(payload.code, 'CAPTURE_FAILED')
-    assert.match(payload.message, /没有取到任何画面/)
   })
 })

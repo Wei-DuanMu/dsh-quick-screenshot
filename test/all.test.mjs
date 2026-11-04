@@ -11,4 +11,3 @@
 
 import './unit.test.mjs'
 import './actions.test.mjs'
-import './client.test.mjs'

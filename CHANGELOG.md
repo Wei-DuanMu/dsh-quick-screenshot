@@ -1,35 +1,21 @@
 # Changelog
 
-## 0.4.0 — 2026-11-05
+## 0.4.1 — 2026-11-05
 
-**Drag a region, the way WeChat's screenshot works**
+**Back to 0.3.0's surface: hotkey only**
 
-`hotkeyCapture: "region"` (or `quick_screenshot_hotkey {capture:"region"}`) now opens a
-full-desktop selection overlay on every press instead of grabbing the focused window:
+The region overlay (0.4.0) and the composer camera button (0.2.x) are gone. This release restores
+the 0.3.0 tree and additionally strips the browser half:
 
-- the desktop is photographed once, at the moment of the press, and the overlay dims everything
-  outside your rectangle — the result is exactly what you framed, even over playing video;
-- a live `WxH` label follows the pointer, `Esc`/right click cancels, a click selects the whole
-  monitor under the pointer;
-- the overlay gives up after two minutes without mouse activity, so a stray press cannot leave a
-  modal window trapping the daemon;
-- a second press while the overlay is open is ignored rather than stacking another modal.
+- `hotkeyCapture: "region"` no longer exists; a press captures the window immediately again.
+- The composer button, its capture route, and the client bundle are removed, along with
+  `dsh.client`, the `./client` export, and the `composerCapture` / `composerArchive` /
+  `composerClipboard` settings. The plugin is now host-only: three tools plus the hotkey.
+- Leftover composer keys in an existing `config.json` are ignored, so upgrading needs no manual
+  edit.
 
-`target: "region"` (or `"select"`) does the same thing on demand from a session, without touching
-the hotkey setting. A cancelled selection reports as a decision, not as a failure.
-
-**Two real bugs found while wiring it up**
-
-- **The daemon never honoured `hotkeyCapture`.** Its config parser only looked for `captureMode`, a
-  key the plugin has never written, so every press captured the active window no matter what was
-  configured. Silent, because the fallback was always a valid mode. Both spellings now work and the
-  documented one wins.
-- **`Save-DshCapture` could not accept pixels.** A local `$bitmap` shadowed its new `-Bitmap`
-  parameter (PowerShell variable names are case-insensitive), so the overlay branch threw
-  `BAD_REQUEST`. The local is renamed, and a borrowed bitmap is no longer disposed by the callee.
-
-Verified on the real machine: a scripted drag through the overlay returned
-`x=200 y=200 500x300 monitor=2` and wrote a 500x300 PNG of exactly that screen area.
+Both features were published and then withdrawn by request; the tags `v0.4.0` and `v0.2.0`–`v0.2.3`
+stay in history for anyone who wants to read how they worked.
 
 ## 0.3.0 — 2026-11-05
 

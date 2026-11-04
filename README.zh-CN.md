@@ -2,7 +2,7 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）用的 Windows 截图插件。
 
-点输入栏里的相机按钮、按一个全局快捷键、或者直接跟 agent 说一句——每张图可以选择三种去处：
+按一个全局快捷键、或者直接跟 agent 说一句——每张图可以选择三种去处：
 **回传给对话里的模型**、**复制到剪贴板**、**存进项目的 `screenshots/` 文件夹留档**。
 
 ```
@@ -77,19 +77,6 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass `
 | `capture` | string | `active`（默认）、`monitor`、`screen`——按键时截什么。 |
 | `archive_dir` | string | 快捷键截图存哪里。默认当前项目下的 `screenshots/`。 |
 
-## 输入栏按钮
-
-输入栏里有一个相机按钮，紧挨着平台自己的附件控件。点一下就会截取你正在看的窗口，并**直接以图片附件的形式放进草稿**——不是文件路径、也不是一整轮对话，你觉得可以了按回车发出去。
-
-这条路径走的是平台原生的附件通道：上传队列、字节进度、顺序、以及发送后 durable 附件记录，和你自己粘贴一张图完全一致。
-
-- 浏览器读不到屏幕，所以按钮通过 `POST /api/quick-screenshot/capture` 向宿主取图；这条路由注册在宿主带鉴权的 fetch 注册表上，用的是和其他路由同一份签名 Cookie。
-- **它不会失败**：如果当前前台窗口解析不出来（切换窗口、切换虚拟桌面、窗口正在销毁），会退到鼠标所在显示器，再退到整个桌面。
-- 和其它截图一样会留档到项目的 `screenshots/`；剪贴板在这条路径上默认关闭，因为图已经进草稿了。
-- 截图过程中按钮禁用并转圈；失败时把原因放进 tooltip，而不是默默什么都不发生。
-
-相关配置：`composerCapture`（`active`/`monitor`/`screen`）、`composerArchive`、`composerClipboard`。
-
 ## 快捷键
 
 默认 `Ctrl+Alt+A`。按下后：截当前窗口 → 写进项目的 `screenshots/` → 复制到剪贴板 → 更新
@@ -132,24 +119,20 @@ DSH 最小化或被其他窗口盖住时同样有效，因为监听器是一个�
 | `maxWidth` | `0` | 超宽图自动缩小；`0` 保持原始像素。 |
 | `showBalloon` | `true` | 每次快捷键截图弹托盘提示。 |
 | `excludeProcesses` | `[]` | 永远不作为截图目标的进程。 |
-| `composerCapture` | `active` | 输入栏按钮截什么：`active` / `monitor` / `screen`。 |
-| `composerArchive` | `true` | 按钮截的图是否也留档到项目文件夹。 |
-| `composerClipboard` | `false` | 按钮截的图是否也复制到剪贴板（通常多余）。 |
 
 ## 实现要点
 
 ```
-DSH 插件（Node）                      浏览器（Web 客户端）
- ├─ 3 个工具                            └─ 输入栏里的相机按钮
- ├─ POST /api/quick-screenshot/capture  ←──── 同源 fetch，带签名 Cookie
+DSH 插件（Node）
+ ├─ 3 个工具
  └─ 常驻 PowerShell 助手（stdio 上的 JSON-Lines）
        ├─ EnumWindows / DWM 边框 / DPI          → 窗口列表
        ├─ GDI+ 抓屏 + PrintWindow 兜底          → PNG/JPEG
        ├─ 剪贴板                                → 随处粘贴
-       └─ RegisterHotKey + 消息泵               → 独立守护进程
+       └─ RegisterHotKey + 消息泵               → 快捷键守护进程
 ```
 
-五个关键决定：
+四个关键决定：
 
 1. **读取任何坐标之前，先把 DPI 感知提到 per-monitor-v2。** 否则 Windows 会做坐标虚拟化：在
    开发机上同一块屏会报成 1707×1067 而不是真实的 2560×1600，截出来的图既糊又偏。
@@ -160,8 +143,6 @@ DSH 插件（Node）                      浏览器（Web 客户端）
    毫秒；所以助手只启动一次，并且每个请求都有超时。
 4. **快捷键守护进程独立且靠文件通信。** 快捷键必须在 DSH 不在前台时也能用，截图也必须能在插件
    重载后继续存在，所以插件通过 `daemon.json`、`events.ndjson`、`latest.json` 跟它通信，而不是管道。
-5. **输入栏按钮放进草稿的是真正的 File，不是特例。** 它通过鉴权路由拿到 PNG 字节，再交给平台自己的
-   `addFiles` 附件入口，因此上传、排序、durable 附件都和你粘贴一张图完全一致——插件自己不碰附件存储。
 
 ## 故障排查
 
@@ -191,9 +172,8 @@ node test/all.test.mjs         # 单进程跑同一批测试，适合受限沙�
 ```
 
 ```
-lib/index.js         工具 schema、描述，以及输入栏截图路由
-lib/actions.js       截图编排、快捷键控制、输入栏截图（用假助手做单测）
-lib/client.js        输入栏按钮（手写的 module-loader bundle，无需构建）
+lib/index.js         工具 schema、描述
+lib/actions.js       截图编排、快捷键控制（用假助手做单测）
 lib/render.js        所有面向用户的文案
 lib/windows.js       窗口打分与目标解析
 lib/combo.js         "Ctrl+Alt+A" → Win32 修饰位 + 虚拟键码
@@ -203,10 +183,6 @@ lib/config.js        配置文件
 host/*.ps1           Win32 层（纯 ASCII：PowerShell 5.1 按 ANSI 读 .ps1）
 scripts/doctor.ps1   一条命令的自检
 ```
-
-`test/client.test.mjs` 会在 Node 里用打桩的 module loader、React 和 `fetch` **真跑** `lib/client.js`，
-所以 bundle 格式或附件入口写错会在 `npm test` 阶段失败，而不是等你重启 DSH 才发现。客户端 bundle 是
-手写的：宿主原样提供服务，因此没有构建步骤可坏，也不需要安装任何构建工具链。
 
 ## 许可证
 

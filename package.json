@@ -1,12 +1,11 @@
 {
   "name": "dsh-quick-screenshot",
-  "version": "0.4.0",
-  "description": "Windows screenshot plugin for DeepSeek Harness (DSH): a composer button, a global hotkey, and three destinations (chat, clipboard, project archive).",
+  "version": "0.4.1",
+  "description": "Windows screenshot plugin for DeepSeek Harness (DSH): a global hotkey with window-aware capture and three destinations (chat, clipboard, project archive).",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
-    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -28,7 +27,7 @@
     "win32"
   ],
   "scripts": {
-    "test": "node --test test/unit.test.mjs test/actions.test.mjs test/client.test.mjs",
+    "test": "node --test test/unit.test.mjs test/actions.test.mjs",
     "test:integration": "node --test test/integration.test.mjs",
     "test:all": "node --test test/",
     "test:local": "node test/all.test.mjs",
@@ -47,8 +46,7 @@
     "window",
     "windows",
     "clipboard",
-    "composer",
-    "鎴浘"
+    "截图"
   ],
   "license": "MIT",
   "author": "Wei-DuanMu",
@@ -63,9 +61,6 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web"
     },
     "compatibility": {
       "dshReleases": {

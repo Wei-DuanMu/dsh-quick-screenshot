@@ -544,18 +544,13 @@ function Save-DshCapture {
           region  -> x, y, width, height
           screen  -> the whole virtual desktop
           monitor -> monitor index
-    .PARAMETER Bitmap
-        Pixels that are already captured (an interactive selection). When present no
-        capture happens at all: this function only copies, downscales and writes.
-        The caller keeps ownership, so the same overlap can be reused or disposed.
     .PARAMETER Prefer
         auto   = PrintWindow, blank-check it, fall back to screen copy (default)
         screen = always read desktop pixels (fails for occluded windows)
         print  = PrintWindow only (works occluded, blank for some DWM windows)
     #>
     param(
-        $Target = $null,
-        [System.Drawing.Bitmap]$Bitmap = $null,
+        [Parameter(Mandatory = $true)]$Target,
         [Parameter(Mandatory = $true)][string]$Path,
         [ValidateSet('png', 'jpeg')][string]$Format = 'png',
         [int]$JpegQuality = 90,
@@ -569,19 +564,8 @@ function Save-DshCapture {
 
     if ($Format -eq 'jpeg' -and $Path -notmatch '\.(jpg|jpeg)$') { $Path = "$Path.jpg" }
 
-    $pixels = $null
-    $ownsBitmap = $true
+    $bitmap = $null
     $method = ''
-
-    if ($null -ne $Bitmap) {
-        # Pixels captured elsewhere (the interactive selection overlay). There is no
-        # geometry to resolve and no capture to retry, only writing to do.
-        if ($null -eq $Target) { $Target = [pscustomobject]@{ kind = 'overlay' } }
-        $ownsBitmap = $false
-    }
-    elseif ($null -eq $Target) {
-        throw 'BAD_REQUEST: Save-DshCapture needs a Target or a Bitmap'
-    }
 
     switch ($Target.kind) {
         'window' {
@@ -592,53 +576,49 @@ function Save-DshCapture {
             if ($Target.minimized -and $Prefer -eq 'auto') {
                 # A minimized window occupies no screen pixels at all, so screen
                 # copy cannot work; PrintWindow is the only possibility.
-                $pixels = [DshShot.Win32]::CaptureWindowPrint($handle, $width, $height)
+                $bitmap = [DshShot.Win32]::CaptureWindowPrint($handle, $width, $height)
                 $method = 'print'
-                if ($null -eq $pixels) {
+                if ($null -eq $bitmap) {
                     throw 'WINDOW_MINIMIZED_UNCAPTURABLE: the window refuses PrintWindow while minimized'
                 }
-                if ([DshShot.Win32]::IsBlank($pixels)) {
-                    $pixels.Dispose()
+                if ([DshShot.Win32]::IsBlank($bitmap)) {
+                    $bitmap.Dispose()
                     throw 'WINDOW_MINIMIZED_BLANK: minimized window returned a flat frame'
                 }
             }
             elseif ($Prefer -eq 'screen') {
-                $pixels = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, $width, $height)
+                $bitmap = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, $width, $height)
                 $method = 'screen'
             }
             elseif ($Prefer -eq 'print') {
-                $pixels = [DshShot.Win32]::CaptureWindowPrint($handle, $width, $height)
+                $bitmap = [DshShot.Win32]::CaptureWindowPrint($handle, $width, $height)
                 $method = 'print'
-                if ($null -eq $pixels) { throw 'PRINTWINDOW_FAILED: the window refused PrintWindow' }
+                if ($null -eq $bitmap) { throw 'PRINTWINDOW_FAILED: the window refused PrintWindow' }
             }
             else {
                 $printed = [DshShot.Win32]::CaptureWindowPrint($handle, $width, $height)
                 if ($null -ne $printed) {
                     if (-not [DshShot.Win32]::IsBlank($printed)) {
-                        $pixels = $printed
+                        $bitmap = $printed
                         $method = 'print'
                     }
                     else {
                         $printed.Dispose()
                     }
                 }
-                if ($null -eq $pixels) {
-                    $pixels = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, $width, $height)
+                if ($null -eq $bitmap) {
+                    $bitmap = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, $width, $height)
                     $method = 'screen'
                 }
             }
         }
-        'overlay' {
-            $pixels = $Bitmap
-            $method = 'overlay'
-        }
         'region' {
-            $pixels = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, [int]$Target.width, [int]$Target.height)
+            $bitmap = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, [int]$Target.width, [int]$Target.height)
             $method = 'screen'
         }
         'screen' {
             $vs = (Get-DshScreens).virtualScreen
-            $pixels = [DshShot.Win32]::CaptureRect([int]$vs.x, [int]$vs.y, [int]$vs.width, [int]$vs.height)
+            $bitmap = [DshShot.Win32]::CaptureRect([int]$vs.x, [int]$vs.y, [int]$vs.width, [int]$vs.height)
             $method = 'screen'
         }
         'monitor' {
@@ -648,26 +628,26 @@ function Save-DshCapture {
             if ($null -eq $monitor) {
                 throw "MONITOR_NOT_FOUND: no monitor with index $wanted (this machine has $($geometry.monitors.Count))"
             }
-            $pixels = [DshShot.Win32]::CaptureRect([int]$monitor.x, [int]$monitor.y, [int]$monitor.width, [int]$monitor.height)
+            $bitmap = [DshShot.Win32]::CaptureRect([int]$monitor.x, [int]$monitor.y, [int]$monitor.width, [int]$monitor.height)
             $method = 'screen'
         }
         default { throw "BAD_TARGET: unknown capture target kind '$($Target.kind)'" }
     }
 
-    if ($null -eq $pixels) { throw 'CAPTURE_FAILED: no pixels were produced' }
+    if ($null -eq $bitmap) { throw 'CAPTURE_FAILED: no pixels were produced' }
 
-    $isBlank = [DshShot.Win32]::IsBlank($pixels)
-    $stats = [DshShot.Win32]::Statistics($pixels)
-    $outputWidth = $pixels.Width
-    $outputHeight = $pixels.Height
+    $isBlank = [DshShot.Win32]::IsBlank($bitmap)
+    $stats = [DshShot.Win32]::Statistics($bitmap)
+    $outputWidth = $bitmap.Width
+    $outputHeight = $bitmap.Height
     $clipboardWritten = $false
 
-    if ($Clipboard) { $clipboardWritten = [DshShot.Win32]::CopyToClipboard($pixels) }
+    if ($Clipboard) { $clipboardWritten = [DshShot.Win32]::CopyToClipboard($bitmap) }
 
-    $saved = $pixels
+    $saved = $bitmap
     try {
         if ($MaxWidth -gt 0) {
-            $saved = [DshShot.Win32]::Fit($pixels, $MaxWidth)
+            $saved = [DshShot.Win32]::Fit($bitmap, $MaxWidth)
             $outputWidth = $saved.Width
             $outputHeight = $saved.Height
         }
@@ -678,10 +658,8 @@ function Save-DshCapture {
         [DshShot.Win32]::SaveImage($saved, $Path, $JpegQuality)
     }
     finally {
-        if ($null -ne $saved -and -not [object]::ReferenceEquals($saved, $pixels)) { $saved.Dispose() }
-        # A caller-supplied bitmap is borrowed, not consumed: the caller may still
-        # want to hand the same pixels to the composer or to a second save.
-        if ($ownsBitmap -and $null -ne $pixels) { $pixels.Dispose() }
+        if ($null -ne $saved -and -not [object]::ReferenceEquals($saved, $bitmap)) { $saved.Dispose() }
+        $bitmap.Dispose()
     }
 
     return [pscustomobject]@{
@@ -715,13 +693,4 @@ function Test-DshWindowsCapability {
         edition    = $PSVersionTable.PSEdition
         apartment  = [string][System.Threading.Thread]::CurrentThread.GetApartmentState()
     }
-}
-
-# Interactive region selection lives in its own file: it is a second Add-Type unit
-# with its own UI concerns, and keeping it out of this one keeps the capture core
-# readable. Dot-sourced here so every existing consumer of the core (the helper and
-# the hotkey daemon) gets Select-DshRegion without changing its load sequence.
-$dshOverlayFile = Join-Path $PSScriptRoot 'overlay.ps1'
-if (Test-Path -LiteralPath $dshOverlayFile) {
-    . $dshOverlayFile
 }
