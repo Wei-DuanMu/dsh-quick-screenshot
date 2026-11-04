@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 — 2026-11-05
+
+**The hotkey now comes back by itself after a restart**
+
+A global hotkey belongs to a process, and this host refuses to create a detached one — so the daemon
+is a child of DSH and dies with it. Every restart therefore left the hotkey dead until someone called
+`quick_screenshot_hotkey {action:"start"}` by hand, which is a maintenance task no user should have.
+
+The plugin now re-registers at load, once per host process (`hotkeyAutoStart`, default `true`):
+
+- fire-and-forget — plugin load never waits on a hotkey, and a machine where registration fails still
+  gets the other three tools;
+- `already-running` is respected, so a second DSH process does not fight the first one for the combo;
+- if `archiveDir` is unset, the fallback is persisted *before* the daemon starts, because the daemon
+  reads that key per press and an empty value there fails a press with nothing to explain it;
+- the outcome goes to `state/autostart.json` and is surfaced by `action: "status"`, which now tells
+  apart the four situations that all used to read 「未在运行」: registered-then-exited,
+  already-running, start-failed (with the Win32 reason), and turned off.
+
 ## 0.2.3 — 2026-11-05
 
 **The button exists but refused every capture: `conversation.input.left` never gets `addFiles`**

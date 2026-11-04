@@ -17,6 +17,7 @@ import { after, describe, it } from 'node:test'
 import {
   DESTINATIONS,
   attachImage,
+  autoStartHotkey,
   capture,
   captureForComposer,
   createComposerCaptureHandler,
@@ -551,6 +552,102 @@ describe('hotkeyControl', () => {
   })
 })
 
+describe('autoStartHotkey', () => {
+  const idleStatus = async () => ({ present: false, ready: false, running: false, pid: null, combo: null, latest: null, recentEvents: [], tried: [] })
+
+  it('registers the configured combo on boot and records it', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkey: 'Ctrl+Shift+A', hotkeyCapture: 'monitor' })
+    let asked = null
+    const record = await autoStartHotkey({
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: idleStatus,
+        startDaemon: async (options) => {
+          asked = options
+          return { ok: true, pid: 777, combo: options.requested, requested: options.requested, fellBack: false, detached: false, tried: [] }
+        },
+      },
+    })
+
+    assert.equal(record.started, true)
+    assert.equal(record.combo, 'Ctrl+Shift+A')
+    assert.equal(record.pid, 777)
+    assert.equal(record.capture, 'monitor')
+    assert.equal(asked.requested, 'Ctrl+Shift+A')
+    assert.ok(asked.combos.length > 1, 'falls back through the candidate ladder on a taken combo')
+    assert.equal(asked.configPath, path.join(dataDir, 'config.json'))
+    assert.ok(existsSync(path.join(stateDirectory, 'autostart.json')), 'the attempt is recorded for status')
+  })
+
+  it('persists a fallback archive directory, because the daemon reads it per press', { skip: !isWindows }, async () => {
+    await resetConfig({})
+    await autoStartHotkey({
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: idleStatus,
+        startDaemon: async ({ requested }) => ({ ok: true, pid: 1, combo: requested, detached: false }),
+      },
+    })
+    const saved = JSON.parse(await readFile(path.join(dataDir, 'config.json'), 'utf8'))
+    // An empty archiveDir means a press has nowhere to save and fails with no
+    // explanation, which is exactly the class of bug this boot hook must not ship.
+    assert.ok(typeof saved.archiveDir === 'string' && saved.archiveDir.length > 0)
+  })
+
+  it('leaves a daemon that is already running alone', { skip: !isWindows }, async () => {
+    await resetConfig({})
+    let started = false
+    const record = await autoStartHotkey({
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: async () => ({ present: true, ready: true, running: true, pid: 4242, combo: 'Ctrl+Shift+B', latest: null, recentEvents: [], tried: [] }),
+        startDaemon: async () => { started = true; return { ok: true } },
+      },
+    })
+    assert.equal(started, false, 'a second daemon would fight over the same hotkey')
+    assert.equal(record.started, false)
+    assert.equal(record.reason, 'already-running')
+    assert.equal(record.combo, 'Ctrl+Shift+B')
+  })
+
+  it('honours hotkeyAutoStart: false', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyAutoStart: false })
+    let started = false
+    const record = await autoStartHotkey({
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: { hotkeyStatus: idleStatus, startDaemon: async () => { started = true; return { ok: true } } },
+    })
+    assert.equal(started, false)
+    assert.equal(record.reason, 'disabled')
+  })
+
+  it('records a failed registration instead of throwing, so the app still boots', { skip: !isWindows }, async () => {
+    await resetConfig({})
+    const record = await autoStartHotkey({
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: idleStatus,
+        startDaemon: async () => ({ ok: false, code: 'HOTKEY_REGISTER_FAILED', message: '没有成功注册全局快捷键。', tried: [{ combo: 'Ctrl+Alt+A', win32: 1409 }] }),
+      },
+    })
+    assert.equal(record.started, false)
+    assert.equal(record.reason, 'start-failed')
+    assert.equal(record.code, 'HOTKEY_REGISTER_FAILED')
+    assert.equal(record.message, '没有成功注册全局快捷键。')
+    assert.deepEqual(record.tried, [{ combo: 'Ctrl+Alt+A', win32: 1409 }])
+  })
+})
+
 describe('attachImage', () => {
   it('returns null without an attachment service', async () => {
     assert.equal(await attachImage({ ctx: {}, filePath: 'x.png' }), null)
@@ -624,6 +721,32 @@ describe('renderers', () => {
     assert.match(
       renderHotkey({ running: false, present: false, tried: [{ combo: 'Ctrl+Alt+A', win32: 1409 }] }),
       /Ctrl\+Alt\+A/,
+    )
+  })
+
+  it('explains what the boot hook did when the hotkey is missing now', () => {
+    // The whole point of recording the attempt: "not running" is not a diagnosis.
+    const failed = renderHotkey({
+      action: 'status',
+      running: false,
+      present: false,
+      autoStart: { at: '2026-11-05T02:48:00.000Z', started: false, reason: 'start-failed', code: 'HOTKEY_REGISTER_FAILED', message: '没有成功注册全局快捷键。' },
+    })
+    assert.match(failed, /DSH 启动时自动注册失败：HOTKEY_REGISTER_FAILED/)
+    assert.match(failed, /2026-11-05 02:48:00/)
+
+    const died = renderHotkey({
+      action: 'status',
+      running: false,
+      present: true,
+      autoStart: { at: '2026-11-05T02:48:00.000Z', started: true, combo: 'Ctrl+Shift+A' },
+    })
+    assert.match(died, /注册成功，但守护进程后来退出了/)
+
+    // A manual stop is a deliberate state, not a boot-hook fault to explain.
+    assert.doesNotMatch(
+      renderHotkey({ action: 'stop', running: false, autoStart: { started: false, reason: 'start-failed' } }),
+      /自动注册失败/,
     )
   })
 

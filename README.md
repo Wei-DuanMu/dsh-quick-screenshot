@@ -141,6 +141,7 @@ patchable through `quick_screenshot_hotkey`:
 | Key | Default | Meaning |
 |---|---|---|
 | `hotkey` | `Ctrl+Alt+A` | Preferred combo. |
+| `hotkeyAutoStart` | `true` | Re-register the hotkey every time DSH starts (see below). |
 | `hotkeyCapture` | `active` | `active` / `monitor` / `screen`. |
 | `archiveDir` | `null` | `null` follows the session workspace. |
 | `clipboard` | `true` | Copy every hotkey capture. |
@@ -152,6 +153,25 @@ patchable through `quick_screenshot_hotkey`:
 | `composerCapture` | `active` | What the composer button captures: `active` / `monitor` / `screen`. |
 | `composerArchive` | `true` | Archive composer captures into the project folder too. |
 | `composerClipboard` | `false` | Also copy composer captures (usually redundant). |
+
+### The hotkey re-registers itself
+
+A global hotkey belongs to a process, and this host will not grant a detached one. So the daemon is
+a child of DSH: it survives focus changes and plugin reloads, and it dies when DSH closes.
+
+That would make "my hotkey stopped working after a restart" the normal case, so the plugin
+re-registers on every boot — `hotkeyAutoStart` (on by default), once per host process, at plugin
+load. It never blocks or breaks the boot: if registration fails you still get the other tools, and
+`quick_screenshot_hotkey` with `action: "status"` reports what that attempt did
+(`state/autostart.json`):
+
+| Recorded reason | What it means |
+|---|---|
+| `started: true` | Registered at boot. If it is missing later, the daemon exited — an earlier DSH process took it down. |
+| `already-running` | A daemon was already up, so this boot left it alone instead of fighting over the same combo. |
+| `start-failed` | Registration failed — most often the combo is taken. Change it with `combo`, and the new one is what boots use from then on. |
+| `disabled` | `hotkeyAutoStart` is `false`. |
+
 
 ## How it works
 
