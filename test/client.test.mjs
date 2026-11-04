@@ -76,13 +76,50 @@ describe('client bundle format', () => {
     assert.deepEqual(Object.keys(entry).sort(), ['factory', 'id'])
   })
 
-  it('exports apply and the declared client injections', async () => {
+  it('exports apply and declares no module dependencies', async () => {
     const { exports, required } = await loadBundle()
     assert.equal(typeof exports.apply, 'function')
-    assert.ok(Array.isArray(exports.inject))
-    assert.ok(exports.inject.includes('@deepseek-ai/dsh-client-ui-conversation'))
+    // An `inject` entry naming something that is not a mountable client row makes
+    // the whole client boot wait forever. 0.2.0 shipped one (a package that only
+    // exists as a TypeScript type) and bricked the app, so this list stays empty
+    // and slot readiness is awaited through ctx.slots.inject instead.
+    assert.deepEqual(exports.inject, [])
     // Only React is required at load time; everything else comes through ctx.
     assert.deepEqual(required, ['react'])
+  })
+
+  it('declares a platform-only client block, with no inject list', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const manifest = JSON.parse(await readFile(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8'))
+    assert.equal(manifest.dsh.client.platform, 'web')
+    assert.equal(manifest.dsh.client.inject, undefined, 'dsh.client.inject must stay absent')
+    assert.equal(manifest.exports['./client'], './lib/client.js')
+  })
+
+  it('returns an inert module instead of throwing when a module is unavailable', async () => {
+    const captured = []
+    const previousWindow = globalThis.window
+    globalThis.window = { __ModuleLoader__: { load: (entry) => captured.push(entry) } }
+    try {
+      await import(`${pathToFileURL(BUNDLE).href}?broken=${Date.now()}`)
+    } finally {
+      globalThis.window = previousWindow
+    }
+
+    // A shell that cannot supply react must yield "no button", never an exception
+    // that takes the whole Web client down with it.
+    const errors = []
+    const originalError = console.error
+    console.error = (...args) => errors.push(args)
+    try {
+      const moduleExports = captured[0].factory(() => { throw new Error('react is not in the table') })
+      assert.equal(typeof moduleExports.apply, 'function')
+      assert.equal(moduleExports.__test, null)
+      assert.equal(typeof moduleExports.apply({}), 'function')
+    } finally {
+      console.error = originalError
+    }
+    assert.equal(errors.length, 1, 'the failure should be logged once, not silently swallowed')
   })
 
   it('is plain CommonJS-compatible code the host can serve without a build', async () => {
@@ -142,6 +179,24 @@ describe('client registration', () => {
     assert.equal(typeof dispose, 'function')
     dispose()
     assert.equal(disposed, true)
+  })
+
+  it('degrades to a no-op when the host provides no slot registry', async () => {
+    const { exports } = await loadBundle()
+    const errors = []
+    const originalError = console.error
+    console.error = (...args) => errors.push(args)
+    try {
+      // A host that does not mount the slot registry must lose the button, not
+      // the app.
+      const dispose = exports.apply({})
+      assert.equal(typeof dispose, 'function')
+      assert.doesNotThrow(() => dispose())
+      assert.equal(typeof exports.apply(undefined), 'function')
+    } finally {
+      console.error = originalError
+    }
+    assert.ok(errors.length >= 1)
   })
 })
 

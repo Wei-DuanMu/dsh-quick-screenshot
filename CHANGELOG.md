@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.1 — 2026-11-05
+
+**0.2.0 could stop the Web client from starting at all — upgrade immediately if you installed it**
+
+`package.json` declared `dsh.client.inject: ["@deepseek-ai/dsh-client-ui-slots", …]`. That package
+is not a client plugin: it exists only as a TypeScript type that other bundles import for
+annotations. The client loader materializes each `inject` entry by importing its bundle, so it waited
+for a bundle that can never arrive and the app never finished booting. The only way back was to
+disable every plugin.
+
+- **`dsh.client.inject` is gone.** The plugin needs exactly one module at load time (`react`, which
+  the shell always provides), and slot readiness is awaited through `ctx.slots.inject` — the API that
+  exists for that job. A package-level dependency list that names a non-existent row is a boot-time
+  deadlock, so the list stays empty.
+- **The client bundle can no longer throw.** The factory body is wrapped: a missing module, a
+  missing slot registry, or any error at materialization returns an inert module and logs once. A UI
+  plugin must be able to lose its own button; it must never be able to prevent the app from booting.
+- The host's route registration no longer requires `ctx.effect` to exist, and a failure there is
+  confined to a warning.
+
+Two regression tests pin it: the manifest must keep `dsh.client.inject` absent, and a factory whose
+`require` throws must still yield a callable, no-op `apply`.
+
 ## 0.2.0 — 2026-11-05
 
 **A camera button in the composer**

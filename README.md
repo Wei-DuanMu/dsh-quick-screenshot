@@ -196,6 +196,7 @@ Five decisions are load-bearing:
 | `Process` shows as `unknown` | The host runs below the target's integrity level (e.g. inside a sandboxed shell), so process names cannot be read. Matching by title still works. |
 | Blank frames everywhere | The desktop is locked, or a remote session is disconnected. |
 | `pnpm` fails with `EPERM: rename …dsh-quick-screenshot` | A process was running with the package directory as its working directory, so Windows refused to rename it. Fixed in 0.1.2 (children now run in the plugin-data folder); upgrade, and if a stale helper still holds it, stop DSH first. |
+| DSH will not start after installing a version | Disable plugins to get back in, then pin a known-good release: `dsh plugin --profile desktop add git+https://github.com/Wei-DuanMu/dsh-quick-screenshot.git#v0.2.1`. 0.2.0 had this failure mode (an invalid `dsh.client.inject` entry) and 0.2.1 fixed it; a client plugin that cannot mount its own button must never stop the app from booting. |
 
 ## Limitations
 

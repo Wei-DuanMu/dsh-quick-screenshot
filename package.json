@@ -1,6 +1,6 @@
 {
   "name": "dsh-quick-screenshot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Windows screenshot plugin for DeepSeek Harness (DSH): a composer button, a global hotkey, and three destinations (chat, clipboard, project archive).",
   "type": "module",
   "main": "lib/index.js",
@@ -65,11 +65,7 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-slots"
-      ]
+      "platform": "web"
     },
     "compatibility": {
       "dshReleases": {
