@@ -69,6 +69,25 @@ namespace DshShot
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT { public int X; public int Y; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CURSORINFO
+    {
+        public int Size;
+        public int Flags;
+        public IntPtr Cursor;
+        public POINT Position;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ICONINFO
+    {
+        public bool IsIcon;
+        public int XHotspot;
+        public int YHotspot;
+        public IntPtr MaskBitmap;
+        public IntPtr ColorBitmap;
+    }
+
     public class WinInfo
     {
         public long Handle;
@@ -88,6 +107,9 @@ namespace DshShot
         public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
         public const int DWMWA_CLOAKED = 14;
         public const uint PW_RENDERFULLCONTENT = 2;
+        public const uint GA_ROOT = 2;
+        public const uint DI_NORMAL = 3;
+        public const int CURSOR_SHOWING = 1;
 
         public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -111,6 +133,24 @@ namespace DshShot
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr WindowFromPoint(POINT point);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorInfo(ref CURSORINFO info);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetIconInfo(IntPtr icon, out ICONINFO info);
+
+        [DllImport("user32.dll")]
+        public static extern bool DrawIconEx(IntPtr hdc, int x, int y, IntPtr icon, int width, int height, uint step, IntPtr flicker, uint flags);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool DeleteObject(IntPtr handle);
 
         [DllImport("user32.dll")]
         public static extern bool GetCursorPos(out POINT lpPoint);
@@ -259,6 +299,54 @@ namespace DshShot
                 if (!ok) { bitmap.Dispose(); return null; }
             }
             return bitmap;
+        }
+
+        /// <summary>Top-level window under a physical screen point, or IntPtr.Zero.</summary>
+        public static IntPtr RootWindowAtPoint(int x, int y)
+        {
+            POINT point;
+            point.X = x;
+            point.Y = y;
+            IntPtr hit = WindowFromPoint(point);
+            if (hit == IntPtr.Zero) return IntPtr.Zero;
+            IntPtr root = GetAncestor(hit, GA_ROOT);
+            return root == IntPtr.Zero ? hit : root;
+        }
+
+        /// <summary>
+        /// Composite the live pointer onto a bitmap whose top-left corner sits at
+        /// (originX, originY) on the virtual desktop. Returns false when there is
+        /// no pointer to draw (hidden cursor, pointer outside the frame).
+        /// </summary>
+        public static bool DrawCursor(Bitmap bitmap, int originX, int originY)
+        {
+            CURSORINFO cursor = new CURSORINFO();
+            cursor.Size = Marshal.SizeOf(typeof(CURSORINFO));
+            if (!GetCursorInfo(ref cursor)) return false;
+            if ((cursor.Flags & CURSOR_SHOWING) == 0) return false;
+            if (cursor.Cursor == IntPtr.Zero) return false;
+            if (cursor.Position.X < originX || cursor.Position.Y < originY) return false;
+
+            ICONINFO icon;
+            if (!GetIconInfo(cursor.Cursor, out icon)) return false;
+            try
+            {
+                int x = cursor.Position.X - originX - icon.XHotspot;
+                int y = cursor.Position.Y - originY - icon.YHotspot;
+                if (x <= -64 || y <= -64) return false;
+                if (x >= bitmap.Width || y >= bitmap.Height) return false;
+                using (Graphics graphics = Graphics.FromImage(bitmap))
+                {
+                    IntPtr hdc = graphics.GetHdc();
+                    try { return DrawIconEx(hdc, x, y, cursor.Cursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL); }
+                    finally { graphics.ReleaseHdc(hdc); }
+                }
+            }
+            finally
+            {
+                if (icon.MaskBitmap != IntPtr.Zero) DeleteObject(icon.MaskBitmap);
+                if (icon.ColorBitmap != IntPtr.Zero) DeleteObject(icon.ColorBitmap);
+            }
         }
 
         /// <summary>Sample luminance spread so a black frame is never reported as success.</summary>
@@ -495,8 +583,58 @@ function Get-DshMonitorIndexAtPoint {
     return -1
 }
 
-function Get-DshWindowGeometry {
+function Get-DshWindowAtPoint {
     <#
+    .SYNOPSIS
+        Top-level window under a screen point, or $null when nothing is there.
+    .DESCRIPTION
+        The "under the pointer" capture mode needs the window the pointer is
+        over, which is not the foreground one. WindowFromPoint returns the child
+        that owns the pixels; GetAncestor walks up to the frame the user thinks
+        of as the window.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][int]$X,
+        [Parameter(Mandatory = $true)][int]$Y
+    )
+    Initialize-DshShot | Out-Null
+    $handle = [DshShot.Win32]::RootWindowAtPoint($X, $Y)
+    if ($handle -eq [IntPtr]::Zero) { return $null }
+    return [string]$handle.ToInt64()
+}
+
+function Get-DshMonitorIndexForWindow {
+    <#
+    .SYNOPSIS
+        The monitor a window mostly sits on (-1 when the window is unknown).
+    .DESCRIPTION
+        Overlap is measured rather than asking the OS, so the answer is the
+        monitor whose pixels the window actually covers - what "the screen this
+        app is on" means to someone pressing a screenshot key.
+    #>
+    param([Parameter(Mandatory = $true)][long]$Handle)
+
+    $geometry = Get-DshWindowGeometry -Handle $Handle
+    if ($null -eq $geometry) { return -1 }
+
+    $best = -1
+    $bestArea = 0
+    foreach ($monitor in (Get-DshScreens).monitors) {
+        $left = [Math]::Max([int]$geometry.x, [int]$monitor.x)
+        $top = [Math]::Max([int]$geometry.y, [int]$monitor.y)
+        $right = [Math]::Min([int]$geometry.x + [int]$geometry.width, [int]$monitor.x + [int]$monitor.width)
+        $bottom = [Math]::Min([int]$geometry.y + [int]$geometry.height, [int]$monitor.y + [int]$monitor.height)
+        if ($right -le $left -or $bottom -le $top) { continue }
+        $area = ($right - $left) * ($bottom - $top)
+        if ($area -gt $bestArea) {
+            $bestArea = $area
+            $best = [int]$monitor.index
+        }
+    }
+    return $best
+}
+
+function Get-DshWindowGeometry {    <#
     .SYNOPSIS
         Frame bounds for one window handle, without going through enumeration.
     .DESCRIPTION
@@ -548,6 +686,9 @@ function Save-DshCapture {
         auto   = PrintWindow, blank-check it, fall back to screen copy (default)
         screen = always read desktop pixels (fails for occluded windows)
         print  = PrintWindow only (works occluded, blank for some DWM windows)
+    .PARAMETER IncludeCursor
+        Composite the live mouse pointer into the frame. Desktop reads never
+        contain the pointer, so this is the only way to show where it was.
     #>
     param(
         [Parameter(Mandatory = $true)]$Target,
@@ -556,7 +697,8 @@ function Save-DshCapture {
         [int]$JpegQuality = 90,
         [int]$MaxWidth = 0,
         [ValidateSet('auto', 'screen', 'print')][string]$Prefer = 'auto',
-        [switch]$Clipboard
+        [switch]$Clipboard,
+        [switch]$IncludeCursor
     )
 
     Initialize-DshShot | Out-Null
@@ -566,12 +708,16 @@ function Save-DshCapture {
 
     $bitmap = $null
     $method = ''
+    $originX = 0
+    $originY = 0
 
     switch ($Target.kind) {
         'window' {
             $handle = [IntPtr][long]$Target.handle
             $width = [int]$Target.width
             $height = [int]$Target.height
+            $originX = [int]$Target.x
+            $originY = [int]$Target.y
 
             if ($Target.minimized -and $Prefer -eq 'auto') {
                 # A minimized window occupies no screen pixels at all, so screen
@@ -613,11 +759,15 @@ function Save-DshCapture {
             }
         }
         'region' {
+            $originX = [int]$Target.x
+            $originY = [int]$Target.y
             $bitmap = [DshShot.Win32]::CaptureRect([int]$Target.x, [int]$Target.y, [int]$Target.width, [int]$Target.height)
             $method = 'screen'
         }
         'screen' {
             $vs = (Get-DshScreens).virtualScreen
+            $originX = [int]$vs.x
+            $originY = [int]$vs.y
             $bitmap = [DshShot.Win32]::CaptureRect([int]$vs.x, [int]$vs.y, [int]$vs.width, [int]$vs.height)
             $method = 'screen'
         }
@@ -628,6 +778,8 @@ function Save-DshCapture {
             if ($null -eq $monitor) {
                 throw "MONITOR_NOT_FOUND: no monitor with index $wanted (this machine has $($geometry.monitors.Count))"
             }
+            $originX = [int]$monitor.x
+            $originY = [int]$monitor.y
             $bitmap = [DshShot.Win32]::CaptureRect([int]$monitor.x, [int]$monitor.y, [int]$monitor.width, [int]$monitor.height)
             $method = 'screen'
         }
@@ -635,6 +787,13 @@ function Save-DshCapture {
     }
 
     if ($null -eq $bitmap) { throw 'CAPTURE_FAILED: no pixels were produced' }
+
+    # The pointer is composited after the pixels are read: a desktop read never
+    # contains it, and a PrintWindow frame never will either.
+    $cursorDrawn = $false
+    if ($IncludeCursor) {
+        $cursorDrawn = [DshShot.Win32]::DrawCursor($bitmap, $originX, $originY)
+    }
 
     $isBlank = [DshShot.Win32]::IsBlank($bitmap)
     $stats = [DshShot.Win32]::Statistics($bitmap)
@@ -672,6 +831,7 @@ function Save-DshCapture {
         minLuminance     = $stats[1]
         maxLuminance     = $stats[2]
         clipboardWritten = [bool]$clipboardWritten
+        cursor           = [bool]$cursorDrawn
         elapsedMs        = [int]$stopwatch.ElapsedMilliseconds
     }
 }

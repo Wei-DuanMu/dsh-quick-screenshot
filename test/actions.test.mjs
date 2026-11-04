@@ -16,6 +16,9 @@ import { after, describe, it } from 'node:test'
 
 import {
   DESTINATIONS,
+  SETTINGS_FIELDS,
+  SettingsError,
+  applySettingsPatch,
   attachImage,
   autoStartHotkey,
   capture,
@@ -23,12 +26,14 @@ import {
   hotkeyControl,
   listWindows,
   parseDestinations,
+  readSettingsView,
   resolveTarget,
   service,
   sessionCwd,
   targetDescription,
 } from '../lib/actions.js'
 import { HelperError } from '../lib/helper-client.js'
+import { resolveArchiveDir } from '../lib/paths.js'
 import { renderCapture, renderHotkey, renderWindowList, formatBytes } from '../lib/render.js'
 import { TargetError } from '../lib/windows.js'
 
@@ -553,7 +558,7 @@ describe('autoStartHotkey', () => {
   const idleStatus = async () => ({ present: false, ready: false, running: false, pid: null, combo: null, latest: null, recentEvents: [], tried: [] })
 
   it('registers the configured combo on boot and records it', { skip: !isWindows }, async () => {
-    await resetConfig({ hotkey: 'Ctrl+Shift+A', hotkeyCapture: 'monitor' })
+    await resetConfig({ hotkey: 'Ctrl+Shift+A', hotkeyCapture: 'current' })
     let asked = null
     const record = await autoStartHotkey({
       dataDir,
@@ -571,7 +576,7 @@ describe('autoStartHotkey', () => {
     assert.equal(record.started, true)
     assert.equal(record.combo, 'Ctrl+Shift+A')
     assert.equal(record.pid, 777)
-    assert.equal(record.capture, 'monitor')
+    assert.equal(record.capture, 'current')
     assert.equal(asked.requested, 'Ctrl+Shift+A')
     assert.ok(asked.combos.length > 1, 'falls back through the candidate ladder on a taken combo')
     assert.equal(asked.configPath, path.join(dataDir, 'config.json'))
@@ -756,5 +761,198 @@ describe('renderers', () => {
   it('describes a target from its window when one was resolved', () => {
     assert.equal(targetDescription({ kind: 'window', description: 'window' }, { title: 'Edge', process: 'msedge', width: 10, height: 10 }), '「Edge」 (msedge) 10x10')
     assert.equal(targetDescription({ kind: 'monitor', description: '显示器 #1' }, null), '显示器 #1')
+  })
+})
+
+describe('settings panel actions', () => {
+  const idle = async () => ({ present: false, ready: false, running: false, pid: null, combo: null, latest: null, recentEvents: [], tried: [] })
+  const running = async () => ({ present: true, ready: true, running: true, pid: 4242, combo: 'Ctrl+Shift+A', latest: null, recentEvents: [], tried: [] })
+
+  const noStart = async () => { throw new Error('startDaemon must not be called') }
+
+  it('reports the settings the panel renders, with defaults as hints', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkey: 'Ctrl+Shift+A', hotkeyCapture: 'screen', includeCursor: true })
+    const view = await readSettingsView({
+      dataDir,
+      stateDirectory,
+      deps: { hotkeyStatus: running },
+    })
+
+    assert.deepEqual(Object.keys(view.settings).sort(), [...SETTINGS_FIELDS].sort())
+    // The legacy name is migrated on read, so the panel always offers canonical values.
+    assert.equal(view.settings.hotkeyCapture, 'all')
+    assert.equal(view.settings.includeCursor, true)
+    assert.equal(view.hotkey.running, true)
+    assert.equal(view.hotkey.combo, 'Ctrl+Shift+A')
+    assert.deepEqual(view.choices.map((choice) => choice.value), ['all', 'current', 'cursor-monitor', 'app'])
+    assert.equal(view.defaults.hotkey, 'Ctrl+Alt+A')
+    assert.equal(typeof view.defaults.archiveDir, 'string')
+    assert.equal(view.platform.supported, true)
+  })
+
+  it('turning the switch off unregisters the hotkey for real', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyEnabled: true, hotkey: 'Ctrl+Shift+A' })
+    const stopped = []
+    const view = await applySettingsPatch({
+      patch: { hotkeyEnabled: false },
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: running,
+        stopDaemon: async (dir) => { stopped.push(dir); return { stopped: true, pid: 4242 } },
+        startDaemon: noStart,
+      },
+    })
+
+    assert.deepEqual(stopped, [stateDirectory], 'the daemon must actually be stopped')
+    assert.equal(view.settings.hotkeyEnabled, false)
+    assert.equal(view.hotkey.running, false)
+    assert.ok(view.notes.some((note) => /已注销/.test(note)))
+
+    const saved = JSON.parse(await readFile(path.join(dataDir, 'config.json'), 'utf8'))
+    assert.equal(saved.hotkeyEnabled, false)
+  })
+
+  it('turning it back on registers the hotkey again', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyEnabled: false, hotkey: 'Ctrl+Shift+A', archiveDir: 'D:\\shots' })
+    let asked = null
+    const view = await applySettingsPatch({
+      patch: { hotkeyEnabled: true },
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: idle,
+        stopDaemon: async () => ({ stopped: false, pid: null }),
+        startDaemon: async (options) => {
+          asked = options
+          return { ok: true, pid: 99, combo: options.requested, requested: options.requested, fellBack: false, tried: [] }
+        },
+      },
+    })
+
+    assert.equal(asked.requested, 'Ctrl+Shift+A')
+    assert.ok(asked.combos.length > 1, 'the candidate ladder is handed to the daemon')
+    assert.equal(view.settings.hotkeyEnabled, true)
+    assert.equal(view.hotkey.running, true)
+    assert.equal(view.hotkey.pid, 99)
+  })
+
+  it('a changed combination restarts the daemon, and a fallback is reported', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyEnabled: true, hotkey: 'Ctrl+Shift+A' })
+    const order = []
+    const view = await applySettingsPatch({
+      patch: { hotkey: 'Ctrl+Alt+F9' },
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: running,
+        stopDaemon: async () => { order.push('stop'); return { stopped: true, pid: 4242 } },
+        startDaemon: async ({ requested }) => {
+          order.push('start')
+          return { ok: true, pid: 7, combo: 'Ctrl+Shift+F9', requested, fellBack: true, tried: [] }
+        },
+      },
+    })
+
+    assert.deepEqual(order, ['stop', 'start'])
+    assert.equal(view.settings.hotkey, 'Ctrl+Alt+F9')
+    assert.equal(view.hotkey.combo, 'Ctrl+Shift+F9')
+    assert.ok(view.notes.some((note) => /已被其他程序占用/.test(note)))
+  })
+
+  it('leaves a running daemon alone when nothing hotkey-related changed', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyEnabled: true, hotkey: 'Ctrl+Shift+A', hotkeyCapture: 'all' })
+    const view = await applySettingsPatch({
+      patch: { hotkeyCapture: 'app', includeCursor: true, clipboard: false },
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: {
+        hotkeyStatus: running,
+        stopDaemon: noStart,
+        startDaemon: noStart,
+      },
+    })
+
+    // The daemon re-reads config.json on every press, so these need no restart.
+    assert.equal(view.settings.hotkeyCapture, 'app')
+    assert.equal(view.settings.includeCursor, true)
+    assert.equal(view.settings.clipboard, false)
+    assert.equal(view.hotkey.running, true)
+  })
+
+  it('rejects a combination the daemon could not parse', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyEnabled: true, hotkey: 'Ctrl+Shift+A' })
+    await assert.rejects(
+      applySettingsPatch({
+        patch: { hotkey: 'A' },
+        dataDir,
+        stateDirectory,
+        pluginRoot: 'C:\\plugin',
+        deps: { hotkeyStatus: running, stopDaemon: noStart, startDaemon: noStart },
+      }),
+      (error) => {
+        assert.ok(error instanceof SettingsError)
+        assert.equal(error.field, 'hotkey')
+        return true
+      },
+    )
+    // A rejected patch must not be persisted.
+    const saved = JSON.parse(await readFile(path.join(dataDir, 'config.json'), 'utf8'))
+    assert.equal(saved.hotkey, 'Ctrl+Shift+A')
+  })
+
+  it('rejects an unknown capture mode and an unusable archive directory', { skip: !isWindows }, async () => {
+    await resetConfig({})
+    await assert.rejects(
+      applySettingsPatch({
+        patch: { hotkeyCapture: 'everything' },
+        dataDir,
+        stateDirectory,
+        pluginRoot: 'C:\\plugin',
+        deps: { hotkeyStatus: idle, stopDaemon: noStart, startDaemon: noStart },
+      }),
+      (error) => error instanceof SettingsError && error.field === 'hotkeyCapture',
+    )
+    await assert.rejects(
+      applySettingsPatch({
+        patch: { archiveDir: 'relative\\shots' },
+        dataDir,
+        stateDirectory,
+        pluginRoot: 'C:\\plugin',
+        deps: { hotkeyStatus: idle, stopDaemon: noStart, startDaemon: noStart },
+      }),
+      (error) => error instanceof SettingsError && error.field === 'archiveDir',
+    )
+  })
+
+  it('an empty archive field falls back to the project folder', { skip: !isWindows }, async () => {
+    // The switch is off so this isolates the archive rule; the daemon start path
+    // has its own cases above.
+    await resetConfig({ hotkeyEnabled: false, archiveDir: 'D:\\shots' })
+    const view = await applySettingsPatch({
+      patch: { archiveDir: null },
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: { hotkeyStatus: idle, stopDaemon: noStart, startDaemon: noStart },
+    })
+    assert.equal(view.settings.archiveDir, null)
+    assert.equal(view.defaults.archiveDir, resolveArchiveDir({ configured: null }))
+  })
+
+  it('boot-time registration stays off while the switch is off', { skip: !isWindows }, async () => {
+    await resetConfig({ hotkeyEnabled: false })
+    const record = await autoStartHotkey({
+      dataDir,
+      stateDirectory,
+      pluginRoot: 'C:\\plugin',
+      deps: { hotkeyStatus: idle, startDaemon: noStart },
+    })
+    assert.equal(record.started, false)
+    assert.equal(record.reason, 'switched-off')
   })
 })

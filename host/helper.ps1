@@ -132,7 +132,8 @@ function Invoke-HelperCommand {
                 -JpegQuality ([int](Get-Arg $RequestArgs 'jpegQuality' 90)) `
                 -MaxWidth ([int](Get-Arg $RequestArgs 'maxWidth' 0)) `
                 -Prefer ([string](Get-Arg $RequestArgs 'prefer' 'auto')) `
-                -Clipboard:([bool](Get-Arg $RequestArgs 'clipboard' $false))
+                -Clipboard:([bool](Get-Arg $RequestArgs 'clipboard' $false)) `
+                -IncludeCursor:([bool](Get-Arg $RequestArgs 'includeCursor' $false))
             return [ordered]@{ capture = $result }
         }
         'clipboard_from_file' {
@@ -168,6 +169,21 @@ function Invoke-HelperCommand {
                 index = (Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y)
                 x     = $cursor.x
                 y     = $cursor.y
+            }
+        }
+        'window_at_point' {
+            # The window the pointer is over - not the foreground one - which is
+            # what "capture the app under the pointer" means.
+            $cursor = Get-DshCursorPosition
+            if ($null -eq $cursor) { throw 'CURSOR_UNKNOWN: the pointer position could not be read' }
+            $handle = Get-DshWindowAtPoint -X $cursor.x -Y $cursor.y
+            $index = -1
+            if ($null -ne $handle) { $index = Get-DshMonitorIndexForWindow -Handle ([long]$handle) }
+            return [ordered]@{
+                handle  = $handle
+                index   = $index
+                x       = $cursor.x
+                y       = $cursor.y
             }
         }
         'quit' {

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 — 2026-11-05
+
+**The settings live in Settings → Integrations now**
+
+A panel under the DSH settings window covers everything that previously needed a hand-edited
+`config.json`: the on/off switch, the hotkey (record it by pressing the keys), the capture mode,
+whether the mouse pointer is included, the archive folder, and copy-to-clipboard.
+
+- **The switch is a real side effect.** Turning it off unregisters the global hotkey so the
+  combination goes back to the rest of Windows; turning it on registers it again. The daemon
+  re-reads the config on every press, so changing mode/cursor/clipboard needs no restart.
+- **Four capture modes, named after what they capture**: `all` (全部屏幕), `current` (当前屏幕 —
+  the monitor holding the foreground window), `cursor-monitor` (光标所在屏幕) and `app`
+  (光标所在应用). The old names still work: `screen` → `all`, `monitor` → `current`,
+  `active` → `app`, so an existing config keeps behaving the same.
+- **`includeCursor` draws the actual mouse pointer** into the shot (Win32 `GetCursorInfo` +
+  `DrawIconEx`, honouring the hotspot), instead of a fake crosshair.
+- The panel talks to the host through a same-origin route,
+  `GET/POST /api/quick-screenshot/settings`, which needs no auth of its own because it rides the
+  browser's signed cookie.
+- The client half is contained: each registration step is wrapped, the bundle is guarded, and
+  `dsh.client` declares no `inject` packages — the failure mode of 0.2.0 (a dead Web UI) is
+  structurally unavailable.
+- A config write is now serialised per directory. Boot-time hotkey registration and a panel save
+  both patch the same file, and the loser of that race used to discard the other's keys.
+
 ## 0.4.2 — 2026-11-05
 
 **The hotkey obeys `hotkeyCapture` again**

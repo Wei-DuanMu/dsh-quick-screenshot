@@ -297,7 +297,7 @@ describe('hotkey daemon', { skip: skipPlatform }, () => {
         { name: 'plugin key', config: { hotkeyCapture: 'screen' }, expected: 'screen' },
         { name: 'legacy key', config: { captureMode: 'screen' }, expected: 'screen' },
         { name: 'both keys', config: { hotkeyCapture: 'monitor', captureMode: 'screen' }, expected: 'monitor' },
-        { name: 'neither key', config: {}, expected: 'active' },
+        { name: 'neither key', config: {}, expected: 'all' },
         { name: 'blank plugin key', config: { hotkeyCapture: '   ', captureMode: 'screen' }, expected: 'screen' },
       ]
 

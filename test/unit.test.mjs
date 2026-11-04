@@ -343,7 +343,8 @@ describe('configuration', () => {
     assert.equal(coerced.format, 'png')
     assert.equal(coerced.jpegQuality, 100)
     assert.equal(coerced.maxWidth, 0)
-    assert.equal(coerced.hotkeyCapture, 'active')
+    assert.equal(coerced.hotkeyCapture, DEFAULT_CONFIG.hotkeyCapture)
+    assert.equal(coerced.hotkeyCapture, 'all')
     assert.deepEqual(coerced.excludeProcesses, ['ok'])
   })
 

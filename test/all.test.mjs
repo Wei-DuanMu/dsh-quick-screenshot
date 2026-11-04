@@ -11,3 +11,5 @@
 
 import './unit.test.mjs'
 import './actions.test.mjs'
+import './config.test.mjs'
+import './client.test.mjs'

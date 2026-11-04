@@ -25,6 +25,9 @@ have to find. This one is built around three details that decide whether it is a
 - **It survives a busy keyboard.** `Ctrl+Alt+A` is already taken on a surprisingly large number
   of machines; the plugin finds the first combo that actually registers and tells you which one
   it got.
+- **It is configured where you expect.** `Settings → Integrations → Quick screenshot` holds the
+  switch, the hotkey, the capture mode, the pointer toggle, the archive folder and the clipboard
+  toggle. Turning the switch off really unregisters the hotkey.
 
 ## Requirements
 
@@ -100,6 +103,24 @@ list and reports the result honestly:
 注意：你想要的 Ctrl+Alt+A 已被其他程序占用，已自动改用 Ctrl+Shift+A。
 ```
 
+## Settings panel
+
+`Settings → Integrations → Quick screenshot`. No config file editing, and the switch is not
+cosmetic:
+
+| Control | What it does |
+|---|---|
+| Switch | Turning it off **unregisters** the global hotkey, handing the combination back to Windows; turning it on registers it again. |
+| Hotkey | Click the field and press the keys you want — it records them. |
+| Capture mode | All screens / Current screen (the monitor holding the foreground window) / Cursor's screen / App under the cursor. |
+| Include the pointer | Draws the real mouse pointer (honouring its hotspot), not a fake crosshair. |
+| Archive folder | Empty means "follow the current project". |
+| Copy to clipboard | Puts the bitmap on the clipboard after each press. |
+
+Changes save immediately. Only a new combination restarts the daemon — mode, pointer and clipboard
+are re-read on every press. The panel talks to the host over the same-origin route
+`GET/POST /api/quick-screenshot/settings`, riding the browser's signed cookie.
+
 ## Where shots go
 
 | Destination | Meaning |
@@ -113,14 +134,16 @@ feed the agent *and* leave you something to paste.
 
 ## Configuration
 
-`%USERPROFILE%\.dsh\plugin-data\dsh-quick-screenshot\config.json` — created on first use, and
-patchable through `quick_screenshot_hotkey`:
+`%USERPROFILE%\.dsh\plugin-data\dsh-quick-screenshot\config.json` — created on first use. The
+settings panel writes this same file, so the two are equivalent:
 
 | Key | Default | Meaning |
 |---|---|---|
+| `hotkeyEnabled` | `true` | The panel's switch. When `false` the daemon registers nothing. |
 | `hotkey` | `Ctrl+Alt+A` | Preferred combo. |
 | `hotkeyAutoStart` | `true` | Re-register the hotkey every time DSH starts (see below). |
-| `hotkeyCapture` | `active` | `active` / `monitor` / `screen`. |
+| `hotkeyCapture` | `all` | `all` / `current` / `cursor-monitor` / `app`; the old names `screen` / `monitor` / `active` still work. |
+| `includeCursor` | `false` | Draw the mouse pointer into the shot. |
 | `archiveDir` | `null` | `null` follows the session workspace. |
 | `clipboard` | `true` | Copy every hotkey capture. |
 | `format` | `png` | `png` or `jpeg`. |

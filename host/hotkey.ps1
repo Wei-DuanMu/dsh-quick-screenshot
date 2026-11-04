@@ -180,13 +180,14 @@ function Write-DaemonState {
 function Read-CaptureConfig {
     <# Re-read on every press so the plugin can retarget the archive without a restart. #>
     $defaults = [ordered]@{
-        archiveDir  = $StateDir
-        format      = 'png'
-        jpegQuality = 90
-        maxWidth    = 0
-        clipboard   = $true
-        showBalloon = $true
-        captureMode = 'active'
+        archiveDir    = $StateDir
+        format        = 'png'
+        jpegQuality   = 90
+        maxWidth      = 0
+        clipboard     = $true
+        showBalloon   = $true
+        includeCursor = $false
+        captureMode   = 'all'
     }
     if (-not (Test-Path -LiteralPath $ConfigPath)) { return $defaults }
     try {
@@ -277,62 +278,140 @@ function Invoke-HotkeyCapture {
         $windowInfo = $null
         $fallback = $null
 
-        if ($mode -eq 'active') {
-            # The enumerated record carries the title for the file name, but the
-            # capture target needs explicit geometry and a kind: an untitled
-            # window is still capturable even though enumeration skips it.
-            $enumerated = @($windows | Where-Object { $_.id -eq $foregroundId }) | Select-Object -First 1
-            $geometry = Get-DshWindowGeometry -Handle ([long]$foregroundId)
-            if ($null -eq $geometry) {
-                # Alt-tab, a virtual-desktop switch, or a window mid-destruction can
-                # leave GetForegroundWindow returning zero or a window with no area
-                # for a moment. A keypress must still produce a screenshot, so fall
-                # back to the monitor the pointer is on and say so in the record.
+        # Four modes, plus the three names the plugin used before 0.5.0, which
+        # must keep their old meaning for a config written by an older version.
+        #   all           -> the whole virtual desktop
+        #   current       -> the screen the foreground window sits on
+        #   cursor-monitor-> the screen the pointer is on
+        #   app           -> the window under the pointer
+        #   active (legacy)  -> the foreground window
+        #   monitor (legacy) -> same as current
+        #   screen (legacy)  -> same as all
+        switch ($mode) {
+            'active' {
+                # The enumerated record carries the title for the file name, but the
+                # capture target needs explicit geometry and a kind: an untitled
+                # window is still capturable even though enumeration skips it.
+                $enumerated = @($windows | Where-Object { $_.id -eq $foregroundId }) | Select-Object -First 1
+                $geometry = Get-DshWindowGeometry -Handle ([long]$foregroundId)
+                if ($null -eq $geometry) {
+                    # Alt-tab, a virtual-desktop switch, or a window mid-destruction can
+                    # leave GetForegroundWindow returning zero or a window with no area
+                    # for a moment. A keypress must still produce a screenshot, so fall
+                    # back to the monitor the pointer is on and say so in the record.
+                    $cursor = Get-DshCursorPosition
+                    $monitorIndex = -1
+                    if ($null -ne $cursor) { $monitorIndex = Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y }
+                    if ($monitorIndex -ge 0) {
+                        $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
+                        $label = "monitor $monitorIndex"
+                        $fallback = 'monitor'
+                    }
+                    else {
+                        $target = [pscustomobject]@{ kind = 'screen' }
+                        $label = 'virtual desktop'
+                        $fallback = 'screen'
+                    }
+                    Write-DaemonLog 'warn' ("foreground window not resolvable (handle={0}); captured {1} instead" -f $foregroundId, $label)
+                }
+                else {
+                    $target = [pscustomobject]@{
+                        kind      = 'window'
+                        handle    = [long]$geometry.id
+                        x         = $geometry.x
+                        y         = $geometry.y
+                        width     = $geometry.width
+                        height    = $geometry.height
+                        minimized = $geometry.minimized
+                    }
+                    if ($null -ne $enumerated) {
+                        $label = $enumerated.title
+                        $windowInfo = [ordered]@{ id = $enumerated.id; title = $enumerated.title; process = $enumerated.process }
+                    }
+                    else {
+                        $label = 'window'
+                        $windowInfo = [ordered]@{ id = $geometry.id; title = ''; process = '' }
+                    }
+                }
+            }
+            'app' {
+                $cursor = Get-DshCursorPosition
+                $handle = $null
+                if ($null -ne $cursor) { $handle = Get-DshWindowAtPoint -X $cursor.x -Y $cursor.y }
+                $geometry = $null
+                if ($null -ne $handle) { $geometry = Get-DshWindowGeometry -Handle ([long]$handle) }
+                if ($null -eq $geometry) {
+                    $monitorIndex = -1
+                    if ($null -ne $cursor) { $monitorIndex = Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y }
+                    if ($monitorIndex -ge 0) {
+                        $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
+                        $label = "monitor $monitorIndex"
+                        $fallback = 'monitor'
+                    }
+                    else {
+                        $target = [pscustomobject]@{ kind = 'screen' }
+                        $label = 'virtual desktop'
+                        $fallback = 'screen'
+                    }
+                    Write-DaemonLog 'warn' ("no window under the pointer (handle={0}); captured {1} instead" -f $handle, $label)
+                }
+                else {
+                    $enumerated = @($windows | Where-Object { $_.id -eq $geometry.id }) | Select-Object -First 1
+                    $target = [pscustomobject]@{
+                        kind      = 'window'
+                        handle    = [long]$geometry.id
+                        x         = $geometry.x
+                        y         = $geometry.y
+                        width     = $geometry.width
+                        height    = $geometry.height
+                        minimized = $geometry.minimized
+                    }
+                    if ($null -ne $enumerated) {
+                        $label = $enumerated.title
+                        $windowInfo = [ordered]@{ id = $enumerated.id; title = $enumerated.title; process = $enumerated.process }
+                    }
+                    else {
+                        $label = 'window'
+                        $windowInfo = [ordered]@{ id = $geometry.id; title = ''; process = '' }
+                    }
+                }
+            }
+            'current' {
+                # Legacy alias: 'monitor' meant the screen of the waiting app.
+                $monitorIndex = Get-DshMonitorIndexForWindow -Handle ([long]$foregroundId)
+                if ($monitorIndex -lt 0) {
+                    $cursor = Get-DshCursorPosition
+                    if ($null -ne $cursor) { $monitorIndex = Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y }
+                }
+                if ($monitorIndex -lt 0) { $monitorIndex = 0 }
+                $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
+                $label = "monitor $monitorIndex"
+            }
+            'monitor' {
+                $active = @($windows | Where-Object { $_.id -eq $foregroundId }) | Select-Object -First 1
+                $monitorIndex = 0
+                if ($null -ne $active -and [int]$active.monitor -ge 0) { $monitorIndex = [int]$active.monitor }
+                $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
+                $label = "monitor $monitorIndex"
+            }
+            'cursor-monitor' {
                 $cursor = Get-DshCursorPosition
                 $monitorIndex = -1
                 if ($null -ne $cursor) { $monitorIndex = Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y }
-                if ($monitorIndex -ge 0) {
-                    $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
-                    $label = "monitor $monitorIndex"
-                    $fallback = 'monitor'
-                }
-                else {
+                if ($monitorIndex -lt 0) {
                     $target = [pscustomobject]@{ kind = 'screen' }
                     $label = 'virtual desktop'
                     $fallback = 'screen'
                 }
-                Write-DaemonLog 'warn' ("foreground window not resolvable (handle={0}); captured {1} instead" -f $foregroundId, $label)
-            }
-            else {
-                $target = [pscustomobject]@{
-                    kind      = 'window'
-                    handle    = [long]$geometry.id
-                    x         = $geometry.x
-                    y         = $geometry.y
-                    width     = $geometry.width
-                    height    = $geometry.height
-                    minimized = $geometry.minimized
-                }
-                if ($null -ne $enumerated) {
-                    $label = $enumerated.title
-                    $windowInfo = [ordered]@{ id = $enumerated.id; title = $enumerated.title; process = $enumerated.process }
-                }
                 else {
-                    $label = 'window'
-                    $windowInfo = [ordered]@{ id = $geometry.id; title = ''; process = '' }
+                    $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
+                    $label = "monitor $monitorIndex"
                 }
             }
-        }
-        elseif ($mode -eq 'monitor') {
-            $active = @($windows | Where-Object { $_.id -eq $foregroundId }) | Select-Object -First 1
-            $monitorIndex = 0
-            if ($null -ne $active -and [int]$active.monitor -ge 0) { $monitorIndex = [int]$active.monitor }
-            $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
-            $label = "monitor $monitorIndex"
-        }
-        else {
-            $target = [pscustomobject]@{ kind = 'screen' }
-            $label = 'virtual desktop'
+            default {
+                $target = [pscustomobject]@{ kind = 'screen' }
+                $label = 'virtual desktop'
+            }
         }
 
         $extension = 'png'
@@ -345,7 +424,8 @@ function Invoke-HotkeyCapture {
             -Format ([string]$config['format']) `
             -JpegQuality ([int]$config['jpegQuality']) `
             -MaxWidth ([int]$config['maxWidth']) `
-            -Clipboard:([bool]$config['clipboard'])
+            -Clipboard:([bool]$config['clipboard']) `
+            -IncludeCursor:([bool]$config['includeCursor'])
 
         $record = [ordered]@{
             ts         = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -356,6 +436,7 @@ function Invoke-HotkeyCapture {
             method     = $result.method
             blank      = [bool]$result.blank
             clipboard  = [bool]$result.clipboardWritten
+            cursor     = [bool]$result.cursor
             mode       = $mode
             window     = $windowInfo
             fallback   = $fallback
