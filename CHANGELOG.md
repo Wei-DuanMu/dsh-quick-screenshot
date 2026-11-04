@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.2 — 2026-11-05
+
+**The hotkey obeys `hotkeyCapture` again**
+
+The 0.4.0 release carried a fix for a bug older than itself: the daemon read a config key
+called `captureMode`, which the plugin has never written — it writes `hotkeyCapture`. So
+changing the capture mode changed nothing on a press, and the window was always captured.
+Reverting to the 0.3.0 tree (0.4.1) took that fix with it; this release puts it back on its
+own, with a regression test that drives the real `Read-CaptureConfig` out of the real script
+through PowerShell instead of grepping for the string.
+
+Both names are accepted now: `hotkeyCapture` wins, `captureMode` still works for a
+hand-edited config, and a blank value falls through to the other one.
+
 ## 0.4.1 — 2026-11-05
 
 **Back to 0.3.0's surface: hotkey only**

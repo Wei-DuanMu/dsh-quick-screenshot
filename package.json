@@ -1,6 +1,6 @@
 {
   "name": "dsh-quick-screenshot",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Windows screenshot plugin for DeepSeek Harness (DSH): a global hotkey with window-aware capture and three destinations (chat, clipboard, project archive).",
   "type": "module",
   "main": "lib/index.js",

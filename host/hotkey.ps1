@@ -200,6 +200,19 @@ function Read-CaptureConfig {
         $property = $parsed.PSObject.Properties[$name]
         if ($null -ne $property -and $null -ne $property.Value) { $defaults[$name] = $property.Value }
     }
+    <#
+        The plugin writes this setting as 'hotkeyCapture'; an early daemon read a key
+        called 'captureMode' that the plugin has never written, so the configured mode
+        was silently ignored on every press. The documented key wins; the old name is
+        still accepted so a hand-edited config keeps working.
+    #>
+    foreach ($alias in @('hotkeyCapture', 'captureMode')) {
+        $property = $parsed.PSObject.Properties[$alias]
+        if ($null -ne $property -and $null -ne $property.Value -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            $defaults['captureMode'] = $property.Value
+            break
+        }
+    }
     return $defaults
 }
 

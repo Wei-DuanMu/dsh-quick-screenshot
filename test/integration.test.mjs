@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Integration tests: drive the real PowerShell helper and the real hotkey daemon.
  *
  * These verify what unit tests cannot: that PowerShell 5.1 can compile the P/Invoke
@@ -13,13 +13,17 @@
  */
 
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, describe, it } from 'node:test'
+import { promisify } from 'node:util'
 
 import { HelperClient } from '../lib/helper-client.js'
 import { hotkeyStatus, readEvents, readLatest, startDaemon, stopDaemon } from '../lib/hotkey.js'
+
+const runPowerShell = promisify(execFile)
 
 const isWindows = process.platform === 'win32'
 const skipPlatform = isWindows ? false : 'Windows only'
@@ -273,6 +277,60 @@ describe('hotkey daemon', { skip: skipPlatform }, () => {
     } finally {
       await stopDaemon(stateDir).catch(() => {})
       await removeTree(stateDir)
+    }
+  })
+
+  it('honours hotkeyCapture written by the plugin, and still accepts the legacy name', async (t) => {
+    // The daemon re-reads its config on every press, so a key it does not know
+    // about is silently ignored — the configured mode then never takes effect.
+    // Drive the real function out of the real script instead of trusting a grep.
+    const source = await readFile(path.join(root, 'host', 'hotkey.ps1'), 'utf8')
+    const lines = source.split(/\r?\n/)
+    const start = lines.findIndex((line) => /^function Read-CaptureConfig \{/.test(line))
+    assert.ok(start >= 0, 'host/hotkey.ps1 should define Read-CaptureConfig')
+    const end = lines.findIndex((line, index) => index > start && line === '}')
+    assert.ok(end > start, 'Read-CaptureConfig should end at a column-zero brace')
+
+    const dir = await mkdtemp(path.join(tmpdir(), 'dsh-quick-screenshot-cfg-'))
+    try {
+      const cases = [
+        { name: 'plugin key', config: { hotkeyCapture: 'screen' }, expected: 'screen' },
+        { name: 'legacy key', config: { captureMode: 'screen' }, expected: 'screen' },
+        { name: 'both keys', config: { hotkeyCapture: 'monitor', captureMode: 'screen' }, expected: 'monitor' },
+        { name: 'neither key', config: {}, expected: 'active' },
+        { name: 'blank plugin key', config: { hotkeyCapture: '   ', captureMode: 'screen' }, expected: 'screen' },
+      ]
+
+      for (const item of cases) {
+        const configPath = path.join(dir, `${item.name.replace(/\W+/g, '-')}.json`)
+        await writeFile(configPath, JSON.stringify(item.config), 'utf8')
+        const scriptPath = `${configPath}.ps1`
+        const quoted = (value) => value.replace(/'/g, "''")
+        const script = [
+          '$ErrorActionPreference = \'Stop\'',
+          `$ConfigPath = '${quoted(configPath)}'`,
+          `$StateDir = '${quoted(dir)}'`,
+          lines.slice(start, end + 1).join('\n'),
+          '$parsed = Read-CaptureConfig',
+          '@{ mode = [string]$parsed[\'captureMode\'] } | ConvertTo-Json -Compress',
+        ].join('\n')
+        await writeFile(scriptPath, script, 'utf8')
+
+        let stdout = null
+        try {
+          ({ stdout } = await runPowerShell('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], { cwd: dir }))
+        } catch (error) {
+          if (/EPERM|EACCES|ENOENT/.test(String(error?.code ?? error?.message ?? ''))) {
+            return t.skip('this environment cannot spawn PowerShell with piped stdio')
+          }
+          throw error
+        }
+
+        const result = JSON.parse(stdout.trim().split(/\r?\n/).at(-1))
+        assert.equal(result.mode, item.expected, `${item.name}: ${JSON.stringify(item.config)}`)
+      }
+    } finally {
+      await removeTree(dir)
     }
   })
 
