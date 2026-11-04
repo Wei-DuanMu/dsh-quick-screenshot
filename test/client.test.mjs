@@ -76,15 +76,18 @@ describe('client bundle format', () => {
     assert.deepEqual(Object.keys(entry).sort(), ['factory', 'id'])
   })
 
-  it('injects the slots service and declares no module dependencies', async () => {
+  it('injects the services it reads and declares no module dependencies', async () => {
     const { exports, required } = await loadBundle()
     assert.equal(typeof exports.apply, 'function')
     // Two unrelated things share the name `inject`. This one is the cordis plugin
-    // face: services the ctx may read. Empty means cordis rejects `ctx.slots` with
-    // `cannot get property "slots" without inject`, so apply throws before
-    // registering anything — which is exactly how 0.2.1 shipped with no button,
-    // and why the error was invisible: apply is guarded so the app still boots.
-    assert.deepEqual(exports.inject, ['slots'])
+    // face: services the ctx may read. An empty list means cordis rejects
+    // `ctx.slots` with `cannot get property "slots" without inject`, so apply
+    // throws before registering anything — which is exactly how 0.2.1 shipped
+    // with no button, and why the error was invisible: apply is guarded so the app
+    // still boots. `conversation` is the second requirement: `conversation.input.left`
+    // hands out standard props only, so the captured file is staged as a draft
+    // through that service rather than through an `addFiles` prop.
+    assert.deepEqual(exports.inject, ['slots', 'conversation'])
     // The other one, `dsh.client.inject`, names module rows and must stay absent:
     // 0.2.0 listed a type-only package there and hung the whole client boot forever.
     // Only React is required at load time; everything else comes through ctx.
@@ -280,6 +283,67 @@ describe('capture into the composer', () => {
       }),
       /目标窗口已最小化/,
     )
+  })
+
+  it('stages the captured PNG through the conversation service when the slot has no addFiles', async () => {
+    const { exports } = await loadBundle()
+    const drafted = []
+    const attached = []
+    const service = {
+      createDrafts: (sessionId, files) => {
+        drafted.push({ sessionId, files })
+        return [{ id: 'draft-1', kind: 'image', file: files[0] }]
+      },
+      releaseDraftAttachments: () => { throw new Error('should not release an accepted draft') },
+    }
+    const slots = {
+      sessionId: 'session-7',
+      // Exactly the props `conversation.input.left` really provides.
+      inputActions: { addAttachments: (ids) => { attached.push(ids); return true } },
+    }
+
+    const file = await exports.__test.captureIntoComposer({
+      slots,
+      service,
+      fetchImpl: async () => new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png' } }),
+    })
+
+    assert.equal(drafted.length, 1, 'one draft allocation')
+    assert.equal(drafted[0].sessionId, 'session-7')
+    assert.equal(drafted[0].files[0], file)
+    assert.deepEqual(attached, [['draft-1']], 'the draft id enters input state')
+  })
+
+  it('releases the draft when admission refuses the attachment ids', async () => {
+    const { exports } = await loadBundle()
+    const released = []
+    const service = {
+      createDrafts: (_sessionId, files) => [{ id: 'draft-2', kind: 'image', file: files[0] }],
+      releaseDraftAttachments: (drafts) => released.push(drafts.map((draft) => draft.id)),
+    }
+
+    await assert.rejects(
+      exports.__test.captureIntoComposer({
+        slots: { sessionId: 'session-8', inputActions: { addAttachments: () => false } },
+        service,
+        fetchImpl: async () => new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png' } }),
+      }),
+      /输入栏正忙/,
+    )
+    assert.deepEqual(released, [['draft-2']], 'a refused draft is handed back, not leaked')
+  })
+
+  it('prefers a direct addFiles verb when the slot owner injects one', async () => {
+    const { exports } = await loadBundle()
+    const staged = []
+    const service = { createDrafts: () => { throw new Error('addFiles path must win') } }
+
+    await exports.__test.captureIntoComposer({
+      slots: { sessionId: 'session-9', addFiles: (files) => staged.push(files[0]), inputActions: {} },
+      service,
+      fetchImpl: async () => new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png' } }),
+    })
+    assert.equal(staged.length, 1)
   })
 
   it('explains a missing intake instead of throwing something opaque', async () => {

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.3 — 2026-11-05
+
+**The button exists but refused every capture: `conversation.input.left` never gets `addFiles`**
+
+0.2.2's button rendered and answered clicks with 当前输入栏不支持附件，无法放入截图 — because it
+looked for an `addFiles(files, directories)` prop that this slot does not provide. The slot contract
+in the shell lists exactly which props `conversation.input.left` hands out, and it is the standard
+set only: `inputActions`, `useSession`, `useSessions`, `sessionId`, `useConversation`, … `addFiles`
+belongs to `conversation.composer.bar`, whose owner component receives it directly; children slots
+do not inherit it.
+
+The supported path is the one the owner itself uses when a file is dropped:
+
+1. `conversation.createDrafts(sessionId, [file])` on the **`conversation` client service** allocates a
+   runtime draft — for an image, a browser-only draft whose bytes ride with the prompt (the same
+   shape a pasted image has).
+2. `inputActions.addAttachments(ids)` registers those ids in the current input state. It returns
+   `false` while admission is mid-flight, in which case `releaseDraftAttachments` hands the drafts
+   back instead of leaking files nobody owns.
+
+So the plugin now declares `inject: ['slots', 'conversation']`, stages through that pair, and keeps
+the direct `addFiles` verb as the first choice for any slot that does inject it.
+
+Diagnosis note: three probes into the served bundle produced the whole contract, with no DevTools and
+no restart — dump `Object.keys(props)` (19 standard props, no `addFiles`), then `ctx.get('<service>')`
+for each candidate name (the guard answers `cannot get property "conversation" without inject`, which
+is itself the proof that a declaration is what activates it).
+
 ## 0.2.2 — 2026-11-05
 
 **0.2.1 booted fine but had no button — the other `inject` was the culprit**
