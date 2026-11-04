@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.3 — 2026-11-05
+
+**Choosing a capture mode now actually changes what a hotkey captures**
+
+The panel only edited local state and waited for the Save button, while its own copy promised that
+changes save themselves — so picking a mode, closing settings and pressing the hotkey still captured
+whatever the file said before. The controls that can be committed one at a time now save the moment
+they change; text fields debounce, and the hotkey field commits on blur, on Enter, or when a
+combination finishes recording.
+
+- `hotkeyEnabled`, capture mode, cursor and clipboard save immediately; the save directory saves
+  after 500 ms of quiet and on blur; the Save button stays as a manual retry.
+- The daemon's `switch ($mode)` gained explicit `'all'` and `'screen'` cases. They used to fall
+  through to `default`, which happened to capture the whole desktop — which is why a mode that did
+  not exist looked identical to a mode that worked.
+- An unknown mode now logs a warning before capturing the virtual desktop instead of being adopted
+  silently.
+- New test: every mode the panel offers must be a case the daemon handles, and the three legacy
+  names (`screen`, `monitor`, `active`) must keep working.
+
 ## 0.5.2 — 2026-11-05
 
 **Service lookup can no longer throw on a service that is not mounted**

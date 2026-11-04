@@ -129,3 +129,23 @@ test('overlapping updates do not discard each other', async () => {
     assert.equal(config.includeCursor, true)
   })
 })
+
+test('every capture mode the panel offers is a case the daemon handles', async () => {
+  // The panel writes a canonical mode into config.json and the daemon switches on
+  // it. When a mode had no case it fell through to `default` and quietly captured
+  // the whole desktop, which is exactly what "the mode does not work" looked like.
+  const script = await readFile(new URL('../host/hotkey.ps1', import.meta.url), 'utf8')
+  const start = script.indexOf('switch ($mode)')
+  assert.ok(start > 0, 'host/hotkey.ps1 should switch on $config["captureMode"]')
+  const block = script.slice(start, script.indexOf('$extension =', start))
+  const cases = new Set([...block.matchAll(/^\s*'([a-z-]+)'\s*\{/gm)].map((match) => match[1]))
+
+  for (const choice of CAPTURE_MODE_CHOICES) {
+    assert.ok(cases.has(choice.value), `daemon has no case for capture mode "${choice.value}"`)
+  }
+  // The names releases before 0.5.0 wrote, which must keep their old meaning.
+  for (const legacy of ['active', 'monitor', 'screen']) {
+    assert.ok(cases.has(legacy), `daemon dropped the legacy capture mode "${legacy}"`)
+  }
+})
+

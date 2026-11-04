@@ -408,7 +408,21 @@ function Invoke-HotkeyCapture {
                     $label = "monitor $monitorIndex"
                 }
             }
+            'all' {
+                # The canonical name for the whole virtual desktop.
+                $target = [pscustomobject]@{ kind = 'screen' }
+                $label = 'virtual desktop'
+            }
+            'screen' {
+                # The pre-0.5.0 name for the same thing.
+                $target = [pscustomobject]@{ kind = 'screen' }
+                $label = 'virtual desktop'
+            }
             default {
+                # A mode this build does not know must still produce a screenshot,
+                # but silently treating a typo as "everything" is how a setting can
+                # look broken for months.
+                Write-DaemonLog 'warn' ("unknown capture mode '{0}'; capturing the virtual desktop" -f $mode)
                 $target = [pscustomobject]@{ kind = 'screen' }
                 $label = 'virtual desktop'
             }
