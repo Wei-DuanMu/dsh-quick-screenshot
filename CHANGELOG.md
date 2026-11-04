@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.2 — 2026-11-05
+
+**The plugin could not be updated, and left itself uninstalled when an update failed**
+
+- **Long-lived children no longer run with the package directory as their working directory.** On
+  Windows a process whose CWD is a directory prevents that directory from being renamed, and
+  installing a newer version of a plugin *is* a rename of the package folder. With the capture
+  helper and the hotkey daemon both parked in `node_modules/dsh-quick-screenshot`, every update
+  failed with `EPERM: rename …_tmp_… -> …dsh-quick-screenshot` — and pnpm had already removed the
+  old copy, so the plugin would have been gone at the next restart. Both processes now run in
+  `plugin-data/dsh-quick-screenshot/scratch` and `…/state` instead.
+- Documented the failure mode in the README's troubleshooting table, because "plugin update says
+  EPERM" is otherwise indistinguishable from an antivirus or permission problem.
+
 ## 0.1.1 — 2026-11-05
 
 Fixes found by installing 0.1.0 into a real desktop DSH.

@@ -154,6 +154,7 @@ DSH 插件（Node）
 | 重启后快捷键失效 | 守护进程不会随开机自启。执行 `quick_screenshot_hotkey { action: "start" }`。 |
 | `进程` 显示 `unknown` | 宿主进程的运行完整性等级低于目标进程（例如在沙箱化终端里），读不到进程名。按标题匹配仍然可用。 |
 | 所有截图都是空白 | 桌面已锁屏，或远程会话已断开。 |
+| `pnpm` 报 `EPERM: rename …dsh-quick-screenshot` | 有进程把插件包目录当成工作目录，Windows 因此拒绝重命名该目录。0.1.2 已修复（子进程改在 plugin-data 下运行）；升级即可，若仍被旧助手占用，先退出 DSH 再更新。 |
 
 ## 已知限制
 

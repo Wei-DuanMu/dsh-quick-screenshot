@@ -165,6 +165,7 @@ Four decisions are load-bearing:
 | Hotkey does nothing after a reboot | The daemon is not auto-started. Run `quick_screenshot_hotkey { action: "start" }`. |
 | `Process` shows as `unknown` | The host runs below the target's integrity level (e.g. inside a sandboxed shell), so process names cannot be read. Matching by title still works. |
 | Blank frames everywhere | The desktop is locked, or a remote session is disconnected. |
+| `pnpm` fails with `EPERM: rename …dsh-quick-screenshot` | A process was running with the package directory as its working directory, so Windows refused to rename it. Fixed in 0.1.2 (children now run in the plugin-data folder); upgrade, and if a stale helper still holds it, stop DSH first. |
 
 ## Limitations
 

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Integration tests: drive the real PowerShell helper and the real hotkey daemon.
  *
  * These verify what unit tests cannot: that PowerShell 5.1 can compile the P/Invoke
@@ -46,7 +46,7 @@ async function ensureHelper () {
     return helper
   } catch (error) {
     const message = String(error?.message ?? '')
-    if (message.includes('EPERM') || message.includes('HELPER_EXITED') || message.includes('启动失败')) {
+    if (message.includes('EPERM') || message.includes('HELPER_EXITED') || message.includes('鍚姩澶辫触')) {
       blockedReason = `this environment cannot spawn a child with piped stdio (${message.slice(0, 120)})`
       await candidate.dispose()
       return null
@@ -57,8 +57,21 @@ async function ensureHelper () {
 
 after(async () => {
   await helper?.dispose()
-  if (workDir) await rm(workDir, { recursive: true, force: true })
+  if (workDir) await removeTree(workDir)
 })
+
+/**
+ * Remove a directory tree, tolerating the OS's handle-release lag.
+ *
+ * The daemon runs with the state directory as its CWD (a process must not run in
+ * the plugin package, or Windows refuses to rename the package during an update),
+ * so a tree can be briefly busy right after the process is signalled.
+ *
+ * @param {string} directory
+ */
+async function removeTree (directory) {
+  await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
+}
 
 describe('capture helper', { skip: skipPlatform }, () => {
   it('answers ping with monitors and a raised DPI awareness', async (t) => {
@@ -210,14 +223,14 @@ describe('hotkey daemon', { skip: skipPlatform }, () => {
       assert.equal(afterStop.running, false)
     } finally {
       await stopDaemon(stateDir).catch(() => {})
-      await rm(stateDir, { recursive: true, force: true })
+      await removeTree(stateDir)
     }
   })
 
   it('handles a full multi-candidate list without a cast error', async (t) => {
     // Regression: `@($json | ConvertFrom-Json)` nested the array, so the loop got
     // the whole array instead of one candidate and `[int]$candidate.mods` cast an
-    // array to int. That only threw with two or more candidates — with one, the
+    // array to int. That only threw with two or more candidates 鈥?with one, the
     // 1-element array coerced fine, so a single-candidate test stayed green while
     // the real plugin (seven candidates) died silently.
     const stateDir = await mkdtemp(path.join(tmpdir(), 'dsh-quick-screenshot-mc-'))
@@ -259,7 +272,7 @@ describe('hotkey daemon', { skip: skipPlatform }, () => {
       assert.match(log, new RegExp(`candidates parsed: ${combos.length}`))
     } finally {
       await stopDaemon(stateDir).catch(() => {})
-      await rm(stateDir, { recursive: true, force: true })
+      await removeTree(stateDir)
     }
   })
 
@@ -276,7 +289,8 @@ describe('hotkey daemon', { skip: skipPlatform }, () => {
       assert.equal(events[0].ts, 2, 'newest first')
       assert.equal(await readLatest(stateDir), null)
     } finally {
-      await rm(stateDir, { recursive: true, force: true })
+      await removeTree(stateDir)
     }
   })
 })
+
