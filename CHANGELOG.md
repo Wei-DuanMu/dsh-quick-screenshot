@@ -1,0 +1,45 @@
+# Changelog
+
+## 0.1.0 — 2026-11-05
+
+First release.
+
+**Tools**
+
+- `quick_screenshot_windows` — enumerate capturable windows and monitors, with fuzzy title /
+  process matching and the focused window sorted first.
+- `quick_screenshot` — capture `active` / `window:<keyword>` / `monitor:<n>` / `region:x,y,w,h` /
+  `screen` / `latest` and route the result to any combination of `chat`, `clipboard`, `archive`.
+- `quick_screenshot_hotkey` — start / stop / status / restart a detached global-hotkey daemon.
+
+**Capture**
+
+- Per-monitor-v2 DPI awareness is raised before geometry is read, so captures are native pixels
+  and correctly positioned on scaled displays and multi-monitor layouts.
+- Window bounds come from `DWMWA_EXTENDED_FRAME_BOUNDS`, so the invisible DWM resize border is
+  excluded.
+- `PrintWindow(PW_RENDERFULLCONTENT)` is attempted first and blank-checked; screen copy of the
+  same rectangle is the fallback. A flat frame is reported as `blank` rather than as success.
+- Minimized windows fail with an actionable message instead of producing an empty file.
+
+**Hotkey**
+
+- Detached PowerShell daemon with a Win32 message pump; keeps working while DSH is minimized.
+- Ordered fallback list: when the preferred combo is already registered by another application,
+  the first combo that actually registers is used and reported.
+- Writes `daemon.json`, `events.ndjson` and `latest.json`, so status and `latest` captures survive
+  plugin reloads.
+
+**Destinations**
+
+- `chat` uses the host attachment store and returns a real image block; degrades to a text
+  placeholder plus path when the host or model cannot take images.
+- `clipboard` copies the frame as a bitmap.
+- `archive` writes to `<workspace>/screenshots/` with a sortable timestamped name and never
+  overwrites (`-2`, `-3`, …).
+
+**Diagnostics**
+
+- `scripts/doctor.ps1` — one-command self-check: DPI level, monitors, window list, real capture.
+- 92 unit and action tests plus an integration suite that drives the real helper and daemon and
+  skips (with a reason) where a sandbox forbids spawning children.

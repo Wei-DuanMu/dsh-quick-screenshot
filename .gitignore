@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+
+# Local reference dumps extracted from the host (never committed)
+.ref/
+.dsh-ref/
+
+# Screenshots this plugin produces during its own testing
+screenshots/
+test/.tmp/
+
+# Local tooling / OS noise
+*.log
+*.ndjson
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

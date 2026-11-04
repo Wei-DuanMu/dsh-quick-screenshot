@@ -1,0 +1,71 @@
+{
+  "name": "dsh-quick-screenshot",
+  "version": "0.1.0",
+  "description": "Windows screenshot plugin for DeepSeek Harness (DSH): auto-detects windows, captures by global hotkey, and routes every shot to chat, clipboard, or a project archive folder.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "host",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "test": "node --test test/unit.test.mjs test/actions.test.mjs",
+    "test:integration": "node --test test/integration.test.mjs",
+    "test:all": "node --test test/",
+    "test:local": "node test/all.test.mjs",
+    "doctor": "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File scripts/doctor.ps1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "screenshot",
+    "capture",
+    "hotkey",
+    "window",
+    "windows",
+    "clipboard",
+    "截图"
+  ],
+  "license": "MIT",
+  "author": "Wei-DuanMu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wei-DuanMu/dsh-quick-screenshot.git"
+  },
+  "homepage": "https://github.com/Wei-DuanMu/dsh-quick-screenshot#readme",
+  "bugs": {
+    "url": "https://github.com/Wei-DuanMu/dsh-quick-screenshot/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible"
+      }
+    }
+  }
+}

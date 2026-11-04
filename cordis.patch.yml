@@ -1,0 +1,4 @@
+# dsh-quick-screenshot bundle patch — inserts this plugin into a profile's layer stack.
+- insert:
+    - id: dsh-quick-screenshot
+      name: 'dsh-quick-screenshot'
