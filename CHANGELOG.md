@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.2 — 2026-11-05
+
+**0.2.1 booted fine but had no button — the other `inject` was the culprit**
+
+Two unrelated things are both called `inject`, and 0.2.0 broke one while 0.2.1 over-corrected by
+deleting the other:
+
+- `dsh.client.inject` (manifest) names **module rows** the client loader must resolve before this
+  bundle runs. Listing the type-only `@deepseek-ai/dsh-client-ui-slots` there deadlocked boot (0.2.0).
+- The cordis **plugin face's** `inject` names **services** the plugin context may read. 0.2.1 left it
+  empty, so `ctx.slots` threw `cannot get property "slots" without inject` on the first line of
+  `apply`. Because `apply` is guarded (by design — a UI plugin must never break boot), the throw was
+  swallowed and the plugin simply contributed nothing.
+
+Fixed by declaring `inject: ['slots']` on the plugin face while keeping `dsh.client.inject` absent.
+A regression test now pins both halves of the distinction, with the failure mode written down next to
+the assertion.
+
+Diagnosis note, since it cost two restarts: the throw happens inside the guarded `apply`, so nothing
+reaches the console. Instrumenting the served bundle in place is enough — the client registry
+hot-reloads it, so a badge drawn into the page can be read back with this plugin's own screenshot
+tool, no rebuild and no restart.
+
 ## 0.2.1 — 2026-11-05
 
 **0.2.0 could stop the Web client from starting at all — upgrade immediately if you installed it**

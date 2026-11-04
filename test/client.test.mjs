@@ -76,19 +76,22 @@ describe('client bundle format', () => {
     assert.deepEqual(Object.keys(entry).sort(), ['factory', 'id'])
   })
 
-  it('exports apply and declares no module dependencies', async () => {
+  it('injects the slots service and declares no module dependencies', async () => {
     const { exports, required } = await loadBundle()
     assert.equal(typeof exports.apply, 'function')
-    // An `inject` entry naming something that is not a mountable client row makes
-    // the whole client boot wait forever. 0.2.0 shipped one (a package that only
-    // exists as a TypeScript type) and bricked the app, so this list stays empty
-    // and slot readiness is awaited through ctx.slots.inject instead.
-    assert.deepEqual(exports.inject, [])
+    // Two unrelated things share the name `inject`. This one is the cordis plugin
+    // face: services the ctx may read. Empty means cordis rejects `ctx.slots` with
+    // `cannot get property "slots" without inject`, so apply throws before
+    // registering anything — which is exactly how 0.2.1 shipped with no button,
+    // and why the error was invisible: apply is guarded so the app still boots.
+    assert.deepEqual(exports.inject, ['slots'])
+    // The other one, `dsh.client.inject`, names module rows and must stay absent:
+    // 0.2.0 listed a type-only package there and hung the whole client boot forever.
     // Only React is required at load time; everything else comes through ctx.
     assert.deepEqual(required, ['react'])
   })
 
-  it('declares a platform-only client block, with no inject list', async () => {
+  it('declares a platform-only client block, with no module inject list', async () => {
     const { readFile } = await import('node:fs/promises')
     const manifest = JSON.parse(await readFile(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8'))
     assert.equal(manifest.dsh.client.platform, 'web')
