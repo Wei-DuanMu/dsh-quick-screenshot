@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1 — 2026-11-05
+
+**The settings panel no longer says "HTTP 404"**
+
+The panel appeared under Settings → Integrations but could not read anything: the host half
+looked up `connection` while the plugin was being applied, and whether that service already
+exists depends on the compose order of sibling plugins. When it was not there yet, the route was
+skipped without an error — a silent, order-dependent failure.
+
+- The route is now registered from a child fiber that waits for `connection`
+  (`ctx.inject(['connection'], …)`), so it does not matter who mounts first, and a host without a
+  Web carrier still gets the three tools instead of a stuck plugin.
+- `requestBody: 'buffered'` is declared explicitly, matching the other `/api/*` routes.
+- The load probe now drives both compose orders — service revealed after `apply`, and service
+  present during `apply` — and asserts GET/POST/invalid-patch results for each.
+
 ## 0.5.0 — 2026-11-05
 
 **The settings live in Settings → Integrations now**
