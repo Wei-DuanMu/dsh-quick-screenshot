@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.3 — 2026-11-05
+
+**A hotkey press could fail instead of taking a screenshot**
+
+Found by pressing the real hotkey four times on a live desktop: three captures succeeded, the
+second failed with `FOREGROUND_WINDOW_UNKNOWN`.
+
+`GetForegroundWindow()` can briefly return zero — during alt-tab, a virtual-desktop switch, or while
+a window is being destroyed — and the daemon treated "no resolvable foreground window" as a fatal
+error. A keypress has nobody to retry it, so this was the wrong response.
+
+- The hotkey now **falls back to the monitor the pointer is on** (and to the whole desktop when even
+  that cannot be resolved), and records `fallback: "monitor" | "screen"` plus the foreground handle
+  in `events.ndjson` / `latest.json`, with a note in the tray balloon.
+- Reusing such a capture via `target: "latest"` says it was a fallback instead of presenting it as a
+  window shot.
+- New core helpers `Get-DshCursorPosition` and `Get-DshMonitorIndexAtPoint`, verified against a
+  real 3-monitor layout (cursor point → monitor 2; off-screen point → -1).
+
+The explicit `quick_screenshot` tool keeps failing loudly for `target: "active"` — an agent can
+retry with `target: "screen"` — while the hotkey, which has nobody to ask, never drops a press.
+
 ## 0.1.2 — 2026-11-05
 
 **The plugin could not be updated, and left itself uninstalled when an update failed**

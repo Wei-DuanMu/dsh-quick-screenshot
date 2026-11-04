@@ -66,6 +66,9 @@ namespace DshShot
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X; public int Y; }
+
     public class WinInfo
     {
         public long Handle;
@@ -108,6 +111,9 @@ namespace DshShot
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
 
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -455,6 +461,38 @@ function Get-DshForegroundWindowId {
     param()
     Initialize-DshShot | Out-Null
     return [string]([DshShot.Win32]::GetForegroundWindow().ToInt64())
+}
+
+function Get-DshCursorPosition {
+    <#
+    .SYNOPSIS
+        Where the mouse pointer is right now, or $null when it cannot be read.
+    .DESCRIPTION
+        Used as the fallback target when the foreground window is not resolvable:
+        during an alt-tab or a desktop switch GetForegroundWindow can briefly
+        return zero, and a hotkey press must still produce a screenshot.
+    #>
+    param()
+    Initialize-DshShot | Out-Null
+    $point = New-Object DshShot.POINT
+    if (-not [DshShot.Win32]::GetCursorPos([ref]$point)) { return $null }
+    return [pscustomobject]@{ x = $point.X; y = $point.Y }
+}
+
+function Get-DshMonitorIndexAtPoint {
+    <# .SYNOPSIS Which monitor contains a physical screen point (-1 when none). #>
+    param(
+        [Parameter(Mandatory = $true)][int]$X,
+        [Parameter(Mandatory = $true)][int]$Y
+    )
+    $geometry = Get-DshScreens
+    foreach ($monitor in $geometry.monitors) {
+        if ($X -ge $monitor.x -and $X -lt ($monitor.x + $monitor.width) -and
+            $Y -ge $monitor.y -and $Y -lt ($monitor.y + $monitor.height)) {
+            return [int]$monitor.index
+        }
+    }
+    return -1
 }
 
 function Get-DshWindowGeometry {

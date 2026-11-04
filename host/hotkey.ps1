@@ -262,6 +262,7 @@ function Invoke-HotkeyCapture {
         $target = $null
         $label = 'screen'
         $windowInfo = $null
+        $fallback = $null
 
         if ($mode -eq 'active') {
             # The enumerated record carries the title for the file name, but the
@@ -270,24 +271,43 @@ function Invoke-HotkeyCapture {
             $enumerated = @($windows | Where-Object { $_.id -eq $foregroundId }) | Select-Object -First 1
             $geometry = Get-DshWindowGeometry -Handle ([long]$foregroundId)
             if ($null -eq $geometry) {
-                throw 'FOREGROUND_WINDOW_UNKNOWN: the foreground window has no readable geometry (try captureMode monitor)'
-            }
-            $target = [pscustomobject]@{
-                kind      = 'window'
-                handle    = [long]$geometry.id
-                x         = $geometry.x
-                y         = $geometry.y
-                width     = $geometry.width
-                height    = $geometry.height
-                minimized = $geometry.minimized
-            }
-            if ($null -ne $enumerated) {
-                $label = $enumerated.title
-                $windowInfo = [ordered]@{ id = $enumerated.id; title = $enumerated.title; process = $enumerated.process }
+                # Alt-tab, a virtual-desktop switch, or a window mid-destruction can
+                # leave GetForegroundWindow returning zero or a window with no area
+                # for a moment. A keypress must still produce a screenshot, so fall
+                # back to the monitor the pointer is on and say so in the record.
+                $cursor = Get-DshCursorPosition
+                $monitorIndex = -1
+                if ($null -ne $cursor) { $monitorIndex = Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y }
+                if ($monitorIndex -ge 0) {
+                    $target = [pscustomobject]@{ kind = 'monitor'; index = $monitorIndex }
+                    $label = "monitor $monitorIndex"
+                    $fallback = 'monitor'
+                }
+                else {
+                    $target = [pscustomobject]@{ kind = 'screen' }
+                    $label = 'virtual desktop'
+                    $fallback = 'screen'
+                }
+                Write-DaemonLog 'warn' ("foreground window not resolvable (handle={0}); captured {1} instead" -f $foregroundId, $label)
             }
             else {
-                $label = 'window'
-                $windowInfo = [ordered]@{ id = $geometry.id; title = ''; process = '' }
+                $target = [pscustomobject]@{
+                    kind      = 'window'
+                    handle    = [long]$geometry.id
+                    x         = $geometry.x
+                    y         = $geometry.y
+                    width     = $geometry.width
+                    height    = $geometry.height
+                    minimized = $geometry.minimized
+                }
+                if ($null -ne $enumerated) {
+                    $label = $enumerated.title
+                    $windowInfo = [ordered]@{ id = $enumerated.id; title = $enumerated.title; process = $enumerated.process }
+                }
+                else {
+                    $label = 'window'
+                    $windowInfo = [ordered]@{ id = $geometry.id; title = ''; process = '' }
+                }
             }
         }
         elseif ($mode -eq 'monitor') {
@@ -315,23 +335,26 @@ function Invoke-HotkeyCapture {
             -Clipboard:([bool]$config['clipboard'])
 
         $record = [ordered]@{
-            ts        = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            ok        = $true
-            path      = $result.path
-            width     = $result.width
-            height    = $result.height
-            method    = $result.method
-            blank     = [bool]$result.blank
-            clipboard = [bool]$result.clipboardWritten
-            mode      = $mode
-            window    = $windowInfo
-            elapsedMs = $result.elapsedMs
+            ts         = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            ok         = $true
+            path       = $result.path
+            width      = $result.width
+            height     = $result.height
+            method     = $result.method
+            blank      = [bool]$result.blank
+            clipboard  = [bool]$result.clipboardWritten
+            mode       = $mode
+            window     = $windowInfo
+            fallback   = $fallback
+            foreground = $foregroundId
+            elapsedMs  = $result.elapsedMs
         }
         [System.IO.File]::WriteAllText($latestPath, ($record | ConvertTo-Json -Depth 8 -Compress), (New-Object System.Text.UTF8Encoding($false)))
         Add-DaemonEvent $record
 
         if ([bool]$config['showBalloon']) {
             $note = '{0}x{1}  {2}' -f $result.width, $result.height, (Get-SafeFileName -Text $label -MaxLength 30)
+            if ($null -ne $fallback) { $note = $note + '  (no window, used ' + $fallback + ')' }
             if ([bool]$result.blank) { $note = $note + '  (looks blank)' }
             Show-CaptureBalloon -Text $note -Failure ([bool]$result.blank)
         }
