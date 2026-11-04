@@ -53,9 +53,10 @@ const windows = [
  * A capture helper that records calls and can materialize files on demand.
  */
 class FakeHelper {
-  constructor ({ onCapture } = {}) {
+  constructor ({ onCapture, onSelect } = {}) {
     this.calls = []
     this.onCapture = onCapture
+    this.onSelect = onSelect
   }
 
   async request (cmd, args = {}) {
@@ -85,6 +86,22 @@ class FakeHelper {
             clipboardWritten: args.clipboard === true,
             elapsedMs: 12,
           },
+        }
+      }
+      case 'select_region': {
+        if (this.onSelect) return await this.onSelect(args)
+        await writeFile(args.path, Buffer.from('fake-png-bytes'))
+        return {
+          capture: {
+            path: args.path,
+            width: 320,
+            height: 200,
+            method: 'overlay',
+            blank: false,
+            clipboardWritten: args.clipboard === true,
+            elapsedMs: 2600,
+          },
+          region: { x: 100, y: 200, width: 320, height: 200, monitor: 1, wholeMonitor: false },
         }
       }
       default:
@@ -391,6 +408,43 @@ describe('capture', () => {
     const value = await capture({ args: { target: 'screen', destinations: 'archive,clipboard' }, exec: {}, ctx: {}, helper: stuck, dataDir, stateDirectory })
     assert.equal(value.clipboardWritten, false)
     assert.ok(value.notes.some((note) => note.includes('剪贴板被其他程序占用')))
+  })
+
+  it('opens the overlay for a bare region and reports where the user drew', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const overlay = new FakeHelper()
+    const value = await capture({ args: { target: 'region', destinations: 'archive' }, exec: {}, ctx: {}, helper: overlay, dataDir, stateDirectory })
+
+    assert.equal(overlay.calls.at(-1).cmd, 'select_region', 'a bare region must ask the overlay, not capture blindly')
+    assert.equal(value.method, 'overlay')
+    assert.equal(value.target.kind, 'select')
+    assert.deepEqual(value.target.region, { x: 100, y: 200, width: 320, height: 200, monitor: 1, wholeMonitor: false })
+  })
+
+  it('explains a click-through monitor selection instead of letting the size look arbitrary', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const whole = new FakeHelper({
+      onSelect: async (args) => {
+        await writeFile(args.path, Buffer.from('bytes'))
+        return {
+          capture: { path: args.path, width: 1920, height: 1080, method: 'overlay', blank: false, clipboardWritten: false, elapsedMs: 90 },
+          region: { x: 0, y: 0, width: 1920, height: 1080, monitor: 2, wholeMonitor: true },
+        }
+      },
+    })
+    const value = await capture({ args: { target: 'select', destinations: 'archive' }, exec: {}, ctx: {}, helper: whole, dataDir, stateDirectory })
+    assert.ok(value.notes.some((note) => note.includes('整块显示器')))
+  })
+
+  it('treats a dismissed overlay as a decision, not a failure', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const cancelled = new FakeHelper({
+      onSelect: async () => { throw new HelperError('dismissed', 'SELECTION_CANCELLED') },
+    })
+    await assert.rejects(
+      capture({ args: { target: 'region', destinations: 'archive' }, exec: {}, ctx: {}, helper: cancelled, dataDir, stateDirectory }),
+      /已取消框选/,
+    )
   })
 })
 

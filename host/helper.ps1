@@ -170,6 +170,37 @@ function Invoke-HelperCommand {
                 y     = $cursor.y
             }
         }
+        'select_region' {
+            # Interactive selection: the caller is blocked until the user drags,
+            # clicks a monitor or dismisses the overlay. Every other capture command
+            # runs on a resolved rectangle; this is the only one that asks.
+            $selection = Select-DshRegion
+            if ($null -eq $selection) { throw 'SELECTION_CANCELLED: the selection overlay was dismissed' }
+            try {
+                $path = Get-Arg $RequestArgs 'path' $null
+                if (-not $path) { throw 'BAD_REQUEST: select_region requires a path' }
+                $result = Save-DshCapture -Bitmap $selection.image `
+                    -Path ([string]$path) `
+                    -Format ([string](Get-Arg $RequestArgs 'format' 'png')) `
+                    -JpegQuality ([int](Get-Arg $RequestArgs 'jpegQuality' 90)) `
+                    -MaxWidth ([int](Get-Arg $RequestArgs 'maxWidth' 0)) `
+                    -Clipboard:([bool](Get-Arg $RequestArgs 'clipboard' $false))
+            }
+            finally {
+                $selection.image.Dispose()
+            }
+            return [ordered]@{
+                capture = $result
+                region  = [ordered]@{
+                    x            = $selection.x
+                    y            = $selection.y
+                    width        = $selection.width
+                    height       = $selection.height
+                    monitor      = $selection.monitor
+                    wholeMonitor = $selection.wholeMonitor
+                }
+            }
+        }
         'quit' {
             return [ordered]@{ bye = $true }
         }

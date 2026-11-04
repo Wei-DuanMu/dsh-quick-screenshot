@@ -190,8 +190,11 @@ describe('capture target parsing', () => {
     assert.equal(parseCaptureTarget('window:微信').query, '微信')
   })
 
-  it('explains a half-written region instead of treating it as a title', () => {
-    assert.throws(() => parseCaptureTarget('region'), /x,y,w,h/)
+  it('treats a bare region as the interactive overlay, but still explains a broken rect', () => {
+    assert.equal(parseCaptureTarget('region').kind, 'select')
+    assert.equal(parseCaptureTarget('select').kind, 'select')
+    assert.equal(parseCaptureTarget('region:1,2,3,4').kind, 'region')
+    assert.throws(() => parseCaptureTarget('region:0,0'), /x,y,w,h/)
     assert.throws(() => parseCaptureTarget('window:'), TargetError)
   })
 })

@@ -200,6 +200,13 @@ function Read-CaptureConfig {
         $property = $parsed.PSObject.Properties[$name]
         if ($null -ne $property -and $null -ne $property.Value) { $defaults[$name] = $property.Value }
     }
+    # The plugin persists this setting as hotkeyCapture. This parser used to look only
+    # for "captureMode", which the plugin never writes, so the chosen mode was ignored
+    # on every press and the daemon always captured the active window. The plugin key
+    # wins because it is the documented one; captureMode stays as an alias so an older
+    # hand-written config keeps working.
+    $alias = $parsed.PSObject.Properties['hotkeyCapture']
+    if ($null -ne $alias -and $null -ne $alias.Value) { $defaults['captureMode'] = $alias.Value }
     return $defaults
 }
 
@@ -250,9 +257,20 @@ function Show-CaptureBalloon {
     }
 }
 
+$script:selecting = $false
+
 function Invoke-HotkeyCapture {
+    if ($script:selecting) {
+        # A second press while the overlay is up would stack a second modal window
+        # with its own snapshot; ignoring it is what every screenshot tool does.
+        Write-DaemonLog 'warn' 'selection overlay already open; press ignored'
+        return
+    }
+
     $config = Read-CaptureConfig
     $started = Get-Date
+    $selection = $null
+    $regionInfo = $null
     try {
         Initialize-DshShot | Out-Null
 
@@ -264,7 +282,46 @@ function Invoke-HotkeyCapture {
         $windowInfo = $null
         $fallback = $null
 
-        if ($mode -eq 'active') {
+        if ($mode -eq 'region') {
+            # Interactive selection. The overlay works on a snapshot it takes itself,
+            # so what the user framed is exactly what they saw at press time.
+            $script:selecting = $true
+            try {
+                $selection = Select-DshRegion
+            }
+            finally {
+                $script:selecting = $false
+            }
+            if ($null -eq $selection) {
+                # Cancelling is a decision, not a failure: no balloon, but the press
+                # stays auditable in the event log.
+                Write-DaemonLog 'info' 'selection cancelled'
+                Add-DaemonEvent ([ordered]@{
+                        ts   = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                        ok   = $false
+                        code = 'SELECTION_CANCELLED'
+                        mode = $mode
+                    })
+                return
+            }
+            $target = [pscustomobject]@{
+                kind   = 'region'
+                x      = $selection.x
+                y      = $selection.y
+                width  = $selection.width
+                height = $selection.height
+            }
+            $label = 'region {0}x{1}' -f $selection.width, $selection.height
+            $regionInfo = [ordered]@{
+                x            = $selection.x
+                y            = $selection.y
+                width        = $selection.width
+                height       = $selection.height
+                monitor      = $selection.monitor
+                wholeMonitor = $selection.wholeMonitor
+            }
+        }
+        elseif ($mode -eq 'active') {
             # The enumerated record carries the title for the file name, but the
             # capture target needs explicit geometry and a kind: an untitled
             # window is still capturable even though enumeration skips it.
@@ -328,12 +385,22 @@ function Invoke-HotkeyCapture {
         $fileName = '{0}_{1}.{2}' -f $stamp, (Get-SafeFileName -Text $label), $extension
         $path = Join-Path ([string]$config['archiveDir']) $fileName
 
-        $result = Save-DshCapture -Target $target -Path $path `
-            -Format ([string]$config['format']) `
-            -JpegQuality ([int]$config['jpegQuality']) `
-            -MaxWidth ([int]$config['maxWidth']) `
-            -Clipboard:([bool]$config['clipboard'])
-
+        $saveArgs = @{
+            Path        = $path
+            Format      = [string]$config['format']
+            JpegQuality = [int]$config['jpegQuality']
+            MaxWidth    = [int]$config['maxWidth']
+            Clipboard   = [bool]$config['clipboard']
+        }
+        if ($null -ne $selection) {
+            # The overlay already produced exactly the pixels to keep; re-capturing
+            # the same rectangle would pick up whatever moved underneath meanwhile.
+            $saveArgs['Bitmap'] = $selection.image
+        }
+        else {
+            $saveArgs['Target'] = $target
+        }
+        $result = Save-DshCapture @saveArgs
         $record = [ordered]@{
             ts         = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
             ok         = $true
@@ -345,6 +412,7 @@ function Invoke-HotkeyCapture {
             clipboard  = [bool]$result.clipboardWritten
             mode       = $mode
             window     = $windowInfo
+            region     = $regionInfo
             fallback   = $fallback
             foreground = $foregroundId
             elapsedMs  = $result.elapsedMs
@@ -353,7 +421,12 @@ function Invoke-HotkeyCapture {
         Add-DaemonEvent $record
 
         if ([bool]$config['showBalloon']) {
-            $note = '{0}x{1}  {2}' -f $result.width, $result.height, (Get-SafeFileName -Text $label -MaxLength 30)
+            if ($null -ne $regionInfo) {
+                $note = '{0}x{1}  region  monitor {2}' -f $result.width, $result.height, $regionInfo.monitor
+            }
+            else {
+                $note = '{0}x{1}  {2}' -f $result.width, $result.height, (Get-SafeFileName -Text $label -MaxLength 30)
+            }
             if ($null -ne $fallback) { $note = $note + '  (no window, used ' + $fallback + ')' }
             if ([bool]$result.blank) { $note = $note + '  (looks blank)' }
             Show-CaptureBalloon -Text $note -Failure ([bool]$result.blank)
@@ -372,6 +445,12 @@ function Invoke-HotkeyCapture {
         }
         Add-DaemonEvent $record
         if ((Read-CaptureConfig)['showBalloon']) { Show-CaptureBalloon -Text $message -Failure $true }
+    }
+    finally {
+        # The daemon owns the pixels the overlay handed back; drop them once written.
+        if ($null -ne $selection) {
+            try { $selection.image.Dispose() } catch { }
+        }
     }
 }
 

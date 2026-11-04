@@ -68,7 +68,7 @@ every window, plus the monitor list. The focused window sorts first.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `target` | string | `active` (default, the focused window), `window:<keyword>`, `monitor:<n>`, `region:x,y,w,h`, `screen` (whole virtual desktop), `latest` (the last hotkey shot). A bare word is treated as a window keyword. |
+| `target` | string | `active` (default, the focused window), `region` (opens the overlay so you drag the area yourself), `window:<keyword>`, `monitor:<n>`, `region:x,y,w,h`, `screen` (whole virtual desktop), `latest` (the last hotkey shot). A bare word is treated as a window keyword. |
 | `destinations` | string | Comma-separated, or `all` / `none`. `chat` = return it to the model, `clipboard` = copy it, `archive` = save into the project. Default `archive,chat`. |
 | `save_path` | string | Save to an explicit absolute path instead (parent directories are created). |
 
@@ -78,7 +78,7 @@ every window, plus the monitor list. The focused window sorts first.
 |---|---|---|
 | `action` | string | `start`, `stop`, `status` (default), `restart`. |
 | `combo` | string | e.g. `Ctrl+Shift+A`. At least one modifier is required. |
-| `capture` | string | `active` (default), `monitor`, or `screen` — what a keypress grabs. |
+| `capture` | string | `active` (default), `region` (drag the area after pressing), `monitor`, or `screen` — what a keypress grabs. |
 | `archive_dir` | string | Where hotkey shots go. Default: the current project's `screenshots/`. |
 
 ## The composer button
@@ -122,6 +122,23 @@ list and reports the result honestly:
 注意：你想要的 Ctrl+Alt+A 已被其他程序占用，已自动改用 Ctrl+Shift+A。
 ```
 
+### Drag to select a region
+
+Set `hotkeyCapture` to `region` (or `quick_screenshot_hotkey { capture: "region" }`) and every
+press opens a full-desktop overlay instead of shooting immediately:
+
+- **drag** a rectangle — the area outside your selection dims, the size shows in a label next to
+  the pointer, and releasing captures exactly that rectangle;
+- **click** a monitor — captures that whole screen, for when a rough region is all you need;
+- **Esc** or a right click — cancels without producing a file (a cancelled selection is reported as
+  a decision, not an error);
+- the overlay dismisses itself after two minutes of no mouse activity, so a stray press can never
+  leave a modal window trapping the daemon.
+
+The pixels come from one snapshot taken at the moment of the press, so what you framed is exactly
+what you get even if a video underneath keeps playing. A single press produces one capture: the
+file, the clipboard copy and the latest pointer all work the same as any other shot.
+
 ## Where shots go
 
 | Destination | Meaning |
@@ -142,7 +159,7 @@ patchable through `quick_screenshot_hotkey`:
 |---|---|---|
 | `hotkey` | `Ctrl+Alt+A` | Preferred combo. |
 | `hotkeyAutoStart` | `true` | Re-register the hotkey every time DSH starts (see below). |
-| `hotkeyCapture` | `active` | `active` / `monitor` / `screen`. |
+| `hotkeyCapture` | `active` | `active` / `region` / `monitor` / `screen`. `region` opens the drag-to-select overlay on every press. |
 | `archiveDir` | `null` | `null` follows the session workspace. |
 | `clipboard` | `true` | Copy every hotkey capture. |
 | `format` | `png` | `png` or `jpeg`. |
