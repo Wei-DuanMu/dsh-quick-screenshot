@@ -18,10 +18,13 @@ import {
   DESTINATIONS,
   attachImage,
   capture,
+  captureForComposer,
+  createComposerCaptureHandler,
   explainCaptureFailure,
   hotkeyControl,
   listWindows,
   parseDestinations,
+  resolveComposerTarget,
   resolveTarget,
   service,
   sessionCwd,
@@ -64,6 +67,8 @@ class FakeHelper {
       case 'window_geometry':
         if (String(args.handle) === '900') return { id: '900', x: 5, y: 6, width: 320, height: 240, minimized: false }
         throw new HelperError('no such window', 'WINDOW_NOT_FOUND')
+      case 'cursor_monitor':
+        return this.cursorMonitor ?? { index: 1, x: 100, y: 100 }
       case 'clipboard_from_file':
         return { written: true }
       case 'capture': {
@@ -631,5 +636,122 @@ describe('renderers', () => {
   it('describes a target from its window when one was resolved', () => {
     assert.equal(targetDescription({ kind: 'window', description: 'window' }, { title: 'Edge', process: 'msedge', width: 10, height: 10 }), '「Edge」 (msedge) 10x10')
     assert.equal(targetDescription({ kind: 'monitor', description: '显示器 #1' }, null), '显示器 #1')
+  })
+})
+
+describe('composer button capture', () => {
+  it('targets the focused window in active mode', async () => {
+    const resolved = await resolveComposerTarget({ windows, helper: new FakeHelper(), mode: 'active' })
+    assert.equal(resolved.request.kind, 'window')
+    assert.equal(resolved.request.handle, 100)
+    assert.equal(resolved.fallback, null)
+    assert.match(resolved.label, /Microsoft Edge/)
+  })
+
+  it('falls back to the pointer monitor when no window is focused', async () => {
+    const unfocused = windows.map((window) => ({ ...window, active: false }))
+    const helper = new FakeHelper()
+    helper.cursorMonitor = { index: 2, x: 900, y: 50 }
+    const resolved = await resolveComposerTarget({ windows: unfocused, helper, mode: 'active' })
+    assert.deepEqual(resolved.request, { kind: 'monitor', index: 2 })
+    assert.equal(resolved.fallback, 'monitor')
+  })
+
+  it('falls back to the whole desktop when even the pointer is unresolved', async () => {
+    const unfocused = windows.map((window) => ({ ...window, active: false }))
+    const helper = new FakeHelper()
+    helper.cursorMonitor = { index: -1, x: 0, y: 0 }
+    const resolved = await resolveComposerTarget({ windows: unfocused, helper, mode: 'active' })
+    assert.deepEqual(resolved.request, { kind: 'screen' })
+    assert.equal(resolved.fallback, 'screen')
+  })
+
+  it('honours the configured mode', async () => {
+    const helper = new FakeHelper()
+    assert.equal((await resolveComposerTarget({ windows, helper, mode: 'monitor' })).request.kind, 'monitor')
+    assert.equal((await resolveComposerTarget({ windows, helper, mode: 'screen' })).request.kind, 'screen')
+  })
+
+  it('archives into the session workspace and returns the bytes', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const helper = new FakeHelper()
+    const shot = await captureForComposer({ helper, dataDir, stateDirectory, cwd: workspace })
+
+    assert.equal(shot.archived, true)
+    assert.equal(path.dirname(path.join(workspace, 'screenshots', shot.fileName)), path.join(workspace, 'screenshots'))
+    assert.equal(shot.contentType, 'image/png')
+    assert.equal(shot.bytes.toString(), 'fake-png-bytes')
+    assert.ok(existsSync(path.join(workspace, 'screenshots', shot.fileName)), 'the archive file must exist')
+    const captureCall = helper.calls.find((call) => call.cmd === 'capture')
+    assert.equal(captureCall.args.clipboard, false, 'clipboard is off by default for composer captures')
+  })
+
+  it('uses a scratch file and removes it when archiving is off', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null, composerArchive: false })
+    const helper = new FakeHelper()
+    const shot = await captureForComposer({ helper, dataDir, stateDirectory, cwd: workspace })
+    assert.equal(shot.archived, false)
+    assert.ok(shot.path === undefined || shot.path === null)
+    assert.equal(existsSync(path.join(stateDirectory, 'tmp', shot.fileName)), false, 'scratch capture must not leak')
+  })
+
+  it('explains a helper failure with an actionable message', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const failing = new FakeHelper({
+      onCapture: async () => { throw new HelperError('minimized', 'WINDOW_MINIMIZED_BLANK') },
+    })
+    await assert.rejects(
+      captureForComposer({ helper: failing, dataDir, stateDirectory, cwd: workspace }),
+      (error) => {
+        assert.equal(error.code, 'WINDOW_MINIMIZED_BLANK')
+        assert.match(error.message, /先还原窗口/)
+        return true
+      },
+    )
+  })
+})
+
+describe('composer capture route', () => {
+  const deps = () => ({ helper: new FakeHelper(), dataDir, stateDirectory, cwd: workspace })
+
+  it('rejects anything but POST', async () => {
+    await resetConfig({ archiveDir: null })
+    const handler = createComposerCaptureHandler(deps())
+    const response = await handler(new Request('http://localhost/api/quick-screenshot/capture', { method: 'GET' }))
+    assert.equal(response.status, 405)
+    assert.equal(response.headers.get('allow'), 'POST')
+  })
+
+  it('answers a POST with PNG bytes and capture metadata', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const handler = createComposerCaptureHandler(deps())
+    const response = await handler(
+      new Request('http://localhost/api/quick-screenshot/capture?sessionId=s1', { method: 'POST' }),
+      { cwd: workspace },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'image/png')
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    assert.equal(response.headers.get('x-capture-archived'), '1')
+    assert.ok(decodeURIComponent(response.headers.get('x-capture-file')).endsWith('.png'))
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    assert.equal(bytes.length, 'fake-png-bytes'.length)
+  })
+
+  it('turns a capture failure into a JSON message the button can show', { skip: !isWindows }, async () => {
+    await resetConfig({ archiveDir: null })
+    const failing = new FakeHelper({
+      onCapture: async () => { throw new HelperError('no pixels', 'CAPTURE_FAILED') },
+    })
+    const handler = createComposerCaptureHandler({ helper: failing, dataDir, stateDirectory, cwd: workspace })
+    const response = await handler(new Request('http://localhost/api/quick-screenshot/capture', { method: 'POST' }))
+
+    assert.equal(response.status, 500)
+    assert.match(String(response.headers.get('content-type')), /application\/json/)
+    const payload = await response.json()
+    assert.equal(payload.ok, false)
+    assert.equal(payload.code, 'CAPTURE_FAILED')
+    assert.match(payload.message, /没有取到任何画面/)
   })
 })

@@ -158,6 +158,18 @@ function Invoke-HelperCommand {
         'screens' {
             return (Get-DshScreens)
         }
+        'cursor_monitor' {
+            # Target fallback when no foreground window can be resolved, so a
+            # capture never fails just because the desktop was mid-transition
+            # (alt-tab, virtual-desktop switch, window destruction).
+            $cursor = Get-DshCursorPosition
+            if ($null -eq $cursor) { return [ordered]@{ index = -1; x = 0; y = 0 } }
+            return [ordered]@{
+                index = (Get-DshMonitorIndexAtPoint -X $cursor.x -Y $cursor.y)
+                x     = $cursor.x
+                y     = $cursor.y
+            }
+        }
         'quit' {
             return [ordered]@{ bye = $true }
         }

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 — 2026-11-05
+
+**A camera button in the composer**
+
+Click it and the window you are looking at is captured and staged in the input box as a normal
+image attachment — the same intake path a pasted image takes, so sending, the upload queue, byte
+progress and durable attachment records all behave exactly as if you had pasted it yourself.
+
+- Registered into `conversation.input.left` (a `list`, session-scoped slot) with `order: 20`, so it
+  sits beside the platform's own accessory controls.
+- The browser cannot read the screen, so the button asks the host over
+  `POST /api/quick-screenshot/capture` — registered on `connection.fetch`, which means it rides the
+  same signed browser-session cookie as every other host route instead of inventing its own auth.
+- The host reuses the existing capture stack (helper, DPI, window matching) and answers with PNG
+  bytes plus `x-capture-*` metadata; a JSON `{ base64 }` envelope is also accepted, so a transport
+  that refuses binary bodies degrades to a working button.
+- Archive policy carries over: composer captures land in the project's `screenshots/` folder by
+  default. Clipboard is off for this path (the image is already going into the draft).
+- The button never refuses: an unresolvable foreground window falls back to the pointer's monitor,
+  then the whole desktop.
+- New settings: `composerCapture` (`active`/`monitor`/`screen`), `composerArchive`, `composerClipboard`.
+
+**No build step**
+
+The client bundle is hand-authored in the host's own module-loader format
+(`window.__ModuleLoader__.load({ id, factory })` around CommonJS-style code, `require()` resolving
+against the shell's frozen module table). No tsdown, no JSX transform, nothing that can fail at
+release time — and `test/client.test.mjs` executes the real file in Node with a stubbed loader,
+React, and `fetch`, so a format or wiring mistake fails the suite instead of a DSH restart.
+
 ## 0.1.3 — 2026-11-05
 
 **A hotkey press could fail instead of taking a screenshot**

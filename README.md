@@ -2,9 +2,9 @@
 
 Window-aware screenshots for [DeepSeek Harness](https://github.com/deepseek-ai) (DSH), on Windows.
 
-Ask the agent to screenshot what you are looking at, or press one global hotkey — and choose
-where each shot goes: **back into the conversation**, **onto the clipboard**, or **into your
-project's `screenshots/` folder**.
+Click the camera in the composer, press one global hotkey, or ask the agent — and choose where each
+shot goes: **back into the conversation**, **onto the clipboard**, or **into your project's
+`screenshots/` folder**.
 
 ```
 你: 截一下现在这个窗口
@@ -81,6 +81,28 @@ every window, plus the monitor list. The focused window sorts first.
 | `capture` | string | `active` (default), `monitor`, or `screen` — what a keypress grabs. |
 | `archive_dir` | string | Where hotkey shots go. Default: the current project's `screenshots/`. |
 
+## The composer button
+
+A camera button sits in the input bar, next to the platform's own accessory controls. One click
+captures the window you are looking at and **stages it in the draft as an image attachment** — not a
+file path, not a chat turn. Press Enter when you are ready.
+
+That means the ordinary attachment path applies: the upload queue, byte progress, ordering, and the
+durable attachment record all behave exactly as if you had pasted the image yourself.
+
+- The browser cannot read the screen, so the button asks the host over
+  `POST /api/quick-screenshot/capture`, registered on the host's authenticated fetch registry (it
+  rides the same signed browser cookie as every other route).
+- It never refuses: if the foreground window cannot be resolved — alt-tab, a virtual-desktop switch,
+  a window mid-destruction — it falls back to the pointer's monitor, then to the whole desktop.
+- Captures are archived into the project like every other shot; the clipboard stays off for this
+  path because the image is already going into the draft.
+- While a capture is in flight the button is disabled and shows a spinner; a failure puts the
+  reason in the tooltip instead of failing silently.
+
+Configure it with `composerCapture` (`active` / `monitor` / `screen`), `composerArchive`, and
+`composerClipboard` in the settings file below.
+
 ## The hotkey
 
 Default `Ctrl+Alt+A`. On press it captures the focused window, writes it into the project's
@@ -127,12 +149,16 @@ patchable through `quick_screenshot_hotkey`:
 | `maxWidth` | `0` | Downscale wider captures; `0` keeps native pixels. |
 | `showBalloon` | `true` | Tray balloon on each hotkey capture. |
 | `excludeProcesses` | `[]` | Never offered as targets. |
+| `composerCapture` | `active` | What the composer button captures: `active` / `monitor` / `screen`. |
+| `composerArchive` | `true` | Archive composer captures into the project folder too. |
+| `composerClipboard` | `false` | Also copy composer captures (usually redundant). |
 
 ## How it works
 
 ```
-DSH plugin (Node)
- ├─ 3 tools
+DSH plugin (Node)                       browser (Web client)
+ ├─ 3 tools                              └─ camera button in the composer
+ ├─ POST /api/quick-screenshot/capture  ←──── fetch, same-origin cookie
  └─ resident PowerShell helper (JSON-Lines over stdio)
        ├─ EnumWindows / DWM frame bounds / DPI      → window list
        ├─ GDI+ screen copy + PrintWindow fallback   → PNG/JPEG
@@ -140,7 +166,7 @@ DSH plugin (Node)
        └─ RegisterHotKey + message pump             → detached daemon
 ```
 
-Four decisions are load-bearing:
+Five decisions are load-bearing:
 
 1. **DPI awareness is raised to per-monitor-v2 before any geometry is read.** Without it Windows
    virtualizes coordinates: on the development machine the same display reports 1707×1067 instead
@@ -154,6 +180,10 @@ Four decisions are load-bearing:
 4. **The hotkey daemon is detached and file-driven.** A hotkey has to fire while DSH is
    unfocused, and a capture has to survive a plugin reload, so the plugin talks to the daemon
    through `daemon.json`, `events.ndjson` and `latest.json` instead of a pipe.
+5. **The composer button stages a real File, not a special case.** It receives PNG bytes over an
+   authenticated route and hands them to the composer's own `addFiles` intake, so uploads,
+   ordering, and durable attachments behave exactly like a pasted image — and the plugin never
+   touches the attachment store itself.
 
 ## Troubleshooting
 
@@ -185,8 +215,9 @@ node test/all.test.mjs         # same tests in one process, for restricted sandb
 ```
 
 ```
-lib/index.js         tool schemas and descriptions only
-lib/actions.js       capture orchestration, hotkey control (unit-tested with a fake helper)
+lib/index.js         tool schemas, descriptions, and the composer capture route
+lib/actions.js       capture orchestration, hotkey control, composer capture
+lib/client.js        the composer button (hand-written module-loader bundle, no build)
 lib/render.js        every user-facing sentence
 lib/windows.js       window scoring and target parsing
 lib/combo.js         "Ctrl+Alt+A" → Win32 modifiers + virtual key
@@ -196,6 +227,11 @@ lib/config.js        settings file
 host/*.ps1           the Win32 layer (ASCII-only: PowerShell 5.1 reads .ps1 as ANSI)
 scripts/doctor.ps1   one-command self-check
 ```
+
+`test/client.test.mjs` runs the real `lib/client.js` in Node with a stubbed module loader, React,
+and `fetch`, so a bad bundle format or a broken intake call fails `npm test` instead of a DSH
+restart. The client bundle is hand-authored: the host serves it verbatim, so there is no build step
+to break and no toolchain to install.
 
 ## License
 
