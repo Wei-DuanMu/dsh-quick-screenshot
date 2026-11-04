@@ -214,6 +214,55 @@ describe('hotkey daemon', { skip: skipPlatform }, () => {
     }
   })
 
+  it('handles a full multi-candidate list without a cast error', async (t) => {
+    // Regression: `@($json | ConvertFrom-Json)` nested the array, so the loop got
+    // the whole array instead of one candidate and `[int]$candidate.mods` cast an
+    // array to int. That only threw with two or more candidates — with one, the
+    // 1-element array coerced fine, so a single-candidate test stayed green while
+    // the real plugin (seven candidates) died silently.
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'dsh-quick-screenshot-mc-'))
+    const configPath = path.join(stateDir, 'config.json')
+    await writeFile(configPath, JSON.stringify({ archiveDir: stateDir, clipboard: false, showBalloon: false, captureMode: 'active' }), 'utf8')
+
+    const combos = [
+      { combo: 'Ctrl+Alt+A', mods: 3, vk: 65 },
+      { combo: 'Ctrl+Shift+A', mods: 6, vk: 65 },
+      { combo: 'Ctrl+Alt+S', mods: 3, vk: 83 },
+      { combo: 'Ctrl+Alt+D', mods: 3, vk: 68 },
+      { combo: 'Ctrl+Shift+S', mods: 6, vk: 83 },
+      { combo: 'Ctrl+Shift+X', mods: 6, vk: 88 },
+      { combo: 'Ctrl+Shift+F9', mods: 6, vk: 120 },
+    ]
+
+    try {
+      const started = await startDaemon({ root, stateDir, configPath, combos, requested: combos[0].combo })
+
+      if (started.code === 'DAEMON_EXITED' || started.code === 'DAEMON_TIMEOUT') {
+        const log = await readFile(path.join(stateDir, 'daemon.log'), 'utf8').catch(() => '')
+        if (log.trim().length === 0) return t.skip('this environment cannot keep a spawned child alive')
+        assert.fail(`daemon died with output: ${log.slice(-300)}`)
+      }
+
+      const details = JSON.stringify(started)
+      assert.ok(!/System\.Object\[\]|System\.Int32/.test(details), `a PowerShell cast error leaked through: ${details}`)
+
+      if (!started.ok) {
+        assert.equal(started.code, 'HOTKEY_REGISTER_FAILED')
+        assert.ok(started.tried.length >= 2, 'every candidate should have been attempted and reported')
+        return
+      }
+
+      // Multi-candidate parsing worked and registration succeeded: the daemon
+      // reports which candidate won, and the log proves it parsed them all.
+      assert.ok(started.combo.length > 0)
+      const log = await readFile(path.join(stateDir, 'daemon.log'), 'utf8')
+      assert.match(log, new RegExp(`candidates parsed: ${combos.length}`))
+    } finally {
+      await stopDaemon(stateDir).catch(() => {})
+      await rm(stateDir, { recursive: true, force: true })
+    }
+  })
+
   it('reads an event log tail without trusting torn lines', async () => {
     const stateDir = await mkdtemp(path.join(tmpdir(), 'dsh-quick-screenshot-ev-'))
     try {

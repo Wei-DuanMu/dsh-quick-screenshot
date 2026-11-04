@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.1 — 2026-11-05
+
+Fixes found by installing 0.1.0 into a real desktop DSH.
+
+**Hotkey daemon: the actual bug**
+
+- **A hotkey list with two or more candidates killed the daemon.** The candidate file was read as
+  `@($json | ConvertFrom-Json)`, which nests the parsed array inside a second array, so the loop
+  received the whole array instead of one candidate and `[int]$candidate.mods` was a cast of an
+  array to `int`. With exactly one candidate the one-element array coerced silently, so a
+  single-candidate test stayed green while the shipping plugin (seven fallbacks) died before
+  registering anything and left no trace. The list is now flattened explicitly and every candidate
+  is validated before use.
+- **A host that forbids detached children no longer kills the hotkey silently.** The daemon is
+  started detached first; when that fails it retries *attached* and says which mode is in force.
+- **Start failures now lead with their reason.** The renderer checked "is a state file present"
+  before "is there an error", so a daemon that died before writing its state produced a message
+  with no code, no detail and nothing to act on.
+- **The daemon owns its own log** (`daemon.log`) with startup breadcrumbs — `booting` → `core
+  loaded` → `candidates parsed: <n>` → `register <combo> -> win32=<n>` → `running` — plus a `trap`
+  that records a fatal error and still writes its state file. A detached child given an inherited
+  stderr handle can lose its first-line errors; an unwritable log is undebuggable.
+- **Start failures report exit code, signal and the log tail** instead of a bare "exited".
+
+**Tests**
+
+- The integration suite now starts a real daemon and asserts it registers, reports and stops, plus
+  a regression case for the multi-candidate cast that only reproduces with two or more combos.
+
 ## 0.1.0 — 2026-11-05
 
 First release.

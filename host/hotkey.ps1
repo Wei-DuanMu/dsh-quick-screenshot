@@ -50,18 +50,57 @@ $WarningPreference = 'SilentlyContinue'
 $VerbosePreference = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
 
-Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
-
-. (Join-Path $Root 'host\screenshot-core.ps1')
-
 $daemonPath = Join-Path $StateDir 'daemon.json'
 $eventsPath = Join-Path $StateDir 'events.ndjson'
 $latestPath = Join-Path $StateDir 'latest.json'
+$logPath = Join-Path $StateDir 'daemon.log'
 
 if (-not (Test-Path -LiteralPath $StateDir)) {
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 }
+
+# The daemon owns its own log instead of relying on an inherited stderr handle.
+# It is launched fully detached with every stdio stream ignored, so a parent that
+# hands it a file descriptor can silently lose the child's first-line errors; a
+# capture daemon that dies without a word is undebuggable.
+function Write-DaemonLog {
+    param([string]$Level, [string]$Message)
+    try {
+        $line = '{0} {1} {2}' -f (Get-Date -Format 'o'), $Level, $Message
+        [System.IO.File]::AppendAllText($logPath, $line + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    catch {
+        # Logging must never be the reason a capture daemon dies.
+    }
+}
+
+# Any terminating error before the message loop must leave a breadcrumb here.
+trap {
+    Write-DaemonLog 'fatal' ($_.Exception.Message + ' @ ' + $_.InvocationInfo.PositionMessage)
+    try {
+        Write-Content $daemonPath ([ordered]@{
+                pid     = $PID
+                ready   = $false
+                phase   = 'fatal'
+                error   = [ordered]@{ code = 'DAEMON_ERROR'; message = $_.Exception.Message }
+            } | ConvertTo-Json -Depth 6 -Compress)
+    }
+    catch { }
+    exit 1
+}
+
+function Write-Content {
+    param([string]$Path, [string]$Text)
+    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+Write-DaemonLog 'info' ("booting pid={0} root={1} combos={2}" -f $PID, $Root, $CombosFile)
+
+Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+
+. (Join-Path $Root 'host\screenshot-core.ps1')
+Write-DaemonLog 'info' 'core loaded'
 
 $hotkeySource = @'
 using System;
@@ -313,18 +352,36 @@ function Invoke-HotkeyCapture {
     }
 }
 
-$candidates = @()
+$candidates = New-Object System.Collections.ArrayList
 try {
     $rawCandidates = [System.IO.File]::ReadAllText($CombosFile, [System.Text.Encoding]::UTF8)
-    $candidates = @($rawCandidates | ConvertFrom-Json)
+    # ConvertFrom-Json returns Object[] for a JSON array; piping it into @() would
+    # wrap that array in ANOTHER array, so the loop below would receive the array
+    # instead of one candidate. That made [int]$candidate.mods a cast of an array,
+    # which only happened to work when there was exactly one candidate.
+    $parsed = ConvertFrom-Json -InputObject $rawCandidates
+    foreach ($entry in $parsed) {
+        if ($null -eq $entry) { continue }
+        $modsProperty = $entry.PSObject.Properties['mods']
+        $vkProperty = $entry.PSObject.Properties['vk']
+        if ($null -eq $modsProperty -or $null -eq $vkProperty) {
+            Write-DaemonLog 'warn' 'candidate without mods/vk skipped'
+            continue
+        }
+        [void]$candidates.Add($entry)
+    }
 }
 catch {
-    $candidates = @()
+    Write-DaemonLog 'error' ('cannot read candidates: ' + $_.Exception.Message)
+    $candidates.Clear()
 }
+Write-DaemonLog 'info' ('candidates parsed: {0}' -f $candidates.Count)
+
 if ($candidates.Count -eq 0) {
     Write-DaemonState ([ordered]@{
             pid       = $PID
             ready     = $false
+            phase     = 'candidates'
             requested = $Requested
             error     = [ordered]@{ code = 'BAD_REQUEST'; message = 'no hotkey candidates were supplied' }
             startedAt = (Get-Date).ToString('o')
@@ -341,6 +398,7 @@ foreach ($candidate in $candidates) {
     $candidateVk = [int]$candidate.vk
     $win32Error = $window.TryRegister([uint32]$candidateMods, [uint32]$candidateVk)
     $tried += [ordered]@{ combo = [string]$candidate.combo; mods = $candidateMods; vk = $candidateVk; win32 = $win32Error }
+    Write-DaemonLog 'info' ("register {0} mods={1} vk={2} -> win32={3}" -f $candidate.combo, $candidateMods, $candidateVk, $win32Error)
     if ($win32Error -eq 0) {
         $chosen = $candidate
         break
@@ -348,9 +406,11 @@ foreach ($candidate in $candidates) {
 }
 
 if ($null -eq $chosen) {
+    Write-DaemonLog 'error' 'no candidate could be registered'
     Write-DaemonState ([ordered]@{
             pid       = $PID
             ready     = $false
+            phase     = 'register'
             requested = $Requested
             tried     = $tried
             error     = [ordered]@{ code = 'HOTKEY_REGISTER_FAILED'; win32 = 1409 }
@@ -360,9 +420,11 @@ if ($null -eq $chosen) {
 }
 
 $chosenCombo = [string]$chosen.combo
+$dpiLevel = (Initialize-DshShot)
 Write-DaemonState ([ordered]@{
         pid       = $PID
         ready     = $true
+        phase     = 'running'
         combo     = $chosenCombo
         requested = $Requested
         fellBack  = ($chosenCombo -ne $Requested)
@@ -371,8 +433,9 @@ Write-DaemonState ([ordered]@{
         tried     = $tried
         script    = $MyInvocation.MyCommand.Path
         startedAt = (Get-Date).ToString('o')
-        dpiLevel  = (Initialize-DshShot)
+        dpiLevel  = $dpiLevel
     })
+Write-DaemonLog 'info' ("running combo={0} dpi={1}" -f $chosenCombo, $dpiLevel)
 
 $window.add_Pressed({ Invoke-HotkeyCapture })
 

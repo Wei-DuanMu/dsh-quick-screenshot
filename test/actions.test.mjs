@@ -604,7 +604,17 @@ describe('renderers', () => {
 
   it('renders the hotkey state for running, stopped and failed daemons', () => {
     assert.match(renderHotkey({ running: true, combo: 'Ctrl+Alt+A', pid: 1 }), /正在运行/)
-    assert.match(renderHotkey({ running: false, present: true, error: { code: 'HOTKEY_REGISTER_FAILED' } }), /未在运行/)
+    // A failure must lead with its reason, not with "not running": the reason is
+    // the only actionable part, and the daemon may have died before writing state.
+    const failed = renderHotkey({
+      running: false,
+      present: false,
+      error: { code: 'DAEMON_EXITED', message: '启动后立即退出', detail: 'exit=1 signal=null' },
+    })
+    assert.match(failed, /启动失败：DAEMON_EXITED/)
+    assert.match(failed, /启动后立即退出/)
+    assert.match(failed, /exit=1/)
+    assert.match(renderHotkey({ running: false, present: true }), /未在运行/)
     assert.match(renderHotkey({ running: false, present: false }), /尚未启动/)
     assert.match(
       renderHotkey({ running: false, present: false, tried: [{ combo: 'Ctrl+Alt+A', win32: 1409 }] }),
